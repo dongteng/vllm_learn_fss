@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "vLLM: API Server Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "vllm.entrypoints.openai.api_server",
+            "args": [
+                "--model",
+                "Qwen/Qwen3-1.7B",
+                "--dtype",
+                "float16",
+                "--max-model-len",
+                "4096",
+                "--gpu-memory-utilization",
+                "0.95",
+                "--max-num-batched-tokens",
+                "8192",
+                "--max-num-seqs",
+                "256",
+                "--port",
+                "13333",
+                "--tensor-parallel-size",
+                "2",
+                "--pipeline-parallel-size",
+                "1",
+                "--enforce-eager"
+            ],
+            "env": {
+                // 可选：设置 CUDA_VISIBLE_DEVICES 控制 GPU 使用
+                // "CUDA_VISIBLE_DEVICES": "0,1",
+                // 开启 vLLM 调试日志
+                "VLLM_LOGGING_LEVEL": "DEBUG",
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false
+        }
+    ]
+}

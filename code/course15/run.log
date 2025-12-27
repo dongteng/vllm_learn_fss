@@ -1,0 +1,106 @@
+(py312) root@3bccafb1bf3d:~/vllm_learn#  cd /root/vllm_learn ; /usr/bin/env /usr/local/miniconda3/envs/py312/bin/python /root/.vscode-server/extensions/ms-python.debugpy-2025.18.0-linux-x64/bundled/libs/debugpy/adapter/../../debugpy/launcher 51373 -- /root/vllm_learn/code/course15/demo2.py 
+INFO 12-20 13:55:37 [utils.py:253] non-default args: {'max_model_len': 4096, 'disable_log_stats': True, 'compilation_config': {'level': None, 'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': './vllm_compile_cache', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': [], 'splitting_ops': None, 'compile_mm_encoder': False, 'compile_sizes': [1, 4], 'compile_ranges_split_points': None, 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [1, 4, 8], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False}, 'local_cache_dir': None}, 'model': 'Qwen/Qwen3-1.7B'}
+INFO 12-20 13:55:49 [model.py:514] Resolved architecture: Qwen3ForCausalLM
+INFO 12-20 13:55:49 [model.py:1661] Using max model len 4096
+INFO 12-20 13:55:50 [scheduler.py:230] Chunked prefill is enabled with max_num_batched_tokens=8192.
+(EngineCore_DP0 pid=23132) INFO 12-20 13:55:52 [core.py:93] Initializing a V1 LLM engine (v0.13.0) with config: model='Qwen/Qwen3-1.7B', speculative_config=None, tokenizer='Qwen/Qwen3-1.7B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=4096, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False), seed=0, served_model_name=Qwen/Qwen3-1.7B, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'level': None, 'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': './vllm_compile_cache', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::kda_attention', 'vllm::sparse_attn_indexer'], 'compile_mm_encoder': False, 'compile_sizes': [1, 4], 'compile_ranges_split_points': [8192], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 4, 8], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'eliminate_noops': True, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False}, 'max_cudagraph_capture_size': 8, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False}, 'local_cache_dir': None}
+(EngineCore_DP0 pid=23132) INFO 12-20 13:55:52 [parallel_state.py:1203] world_size=1 rank=0 local_rank=0 distributed_init_method=tcp://10.60.137.237:47559 backend=nccl
+[W1220 13:56:07.998074182 socket.cpp:209] [c10d] The hostname of the client socket cannot be retrieved. err=-3
+[rank0]:[W1220 13:56:07.073628118 ProcessGroupGloo.cpp:516] Warning: Unable to resolve hostname to a (local) address. Using the loopback address as fallback. Manually set the network interface to bind to with GLOO_SOCKET_IFNAME. (function operator())
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:08 [parallel_state.py:1411] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:09 [gpu_model_runner.py:3562] Starting to load model Qwen/Qwen3-1.7B...
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:09 [cuda.py:351] Using FLASH_ATTN attention backend out of potential backends: ('FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION')
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:11 [weight_utils.py:487] Time spent downloading weights for Qwen/Qwen3-1.7B: 1.086212 seconds
+model.safetensors.index.json: 25.6kB [00:00, 59.7MB/s]
+Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:17<00:00,  8.95s/it]
+Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:17<00:00,  8.95s/it]
+(EngineCore_DP0 pid=23132) 
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:30 [default_loader.py:308] Loading weights took 17.99 seconds
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:31 [gpu_model_runner.py:3659] Model loading took 3.2152 GiB memory and 21.143367 seconds
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:41 [backends.py:643] Using cache directory: ./vllm_compile_cache/rank_0_0/backbone for vLLM's torch.compile
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:41 [backends.py:703] Dynamo bytecode transform time: 9.44 s
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:50 [backends.py:261] Cache the graph of compile range (1, 8192) for later use
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:56 [backends.py:278] Compiling a graph for compile range (1, 8192) takes 9.40 s
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:58 [gpu_worker.py:375] Available KV cache memory: 16.54 GiB
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:58 [kv_cache_utils.py:1291] GPU KV cache size: 154,880 tokens
+(EngineCore_DP0 pid=23132) INFO 12-20 13:56:58 [kv_cache_utils.py:1296] Maximum concurrency for 4,096 tokens per request: 37.81x
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|                                      | 0/3 [00:00<?, ?it/s]/usr/local/miniconda3/envs/py312/lib/python3.12/site-packages/torch/backends/cuda/__init__.py:131: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:80.)
+(EngineCore_DP0 pid=23132)   return torch._C._get_cublas_allow_tf32()
+(EngineCore_DP0 pid=23132) Autotune Choices Stats:
+(EngineCore_DP0 pid=23132) {"num_choices": 16, "num_triton_choices": 15, "best_kernel": "mm", "best_time": 0.05427199974656105, "best_triton_pos": 1, "best_triton_time": 0.0870399996638298, "best_triton_kernel": "triton_mm_2", "best_triton_kernel_desc": "ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=4"}
+(EngineCore_DP0 pid=23132) AUTOTUNE mm(4x2048, 2048x4096)
+(EngineCore_DP0 pid=23132) strides: [2048, 1], [1, 2048]
+(EngineCore_DP0 pid=23132) dtypes: torch.bfloat16, torch.bfloat16
+(EngineCore_DP0 pid=23132)   mm 0.0543 ms 100.0% 
+(EngineCore_DP0 pid=23132)   triton_mm_2 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_3 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_4 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_7 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_8 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_10 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_11 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_12 0.0870 ms 62.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=4, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_1 0.0881 ms 61.6% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=2, num_warps=2
+(EngineCore_DP0 pid=23132) SingleProcess AUTOTUNE benchmarking takes 0.3809 seconds and 4.4101 seconds precompiling for 16 choices
+(EngineCore_DP0 pid=23132) INFO 12-20 13:57:16 [backends.py:261] Cache the graph of compile range (4, 4) for later use
+(EngineCore_DP0 pid=23132) Autotune Choices Stats:
+(EngineCore_DP0 pid=23132) {"num_choices": 16, "num_triton_choices": 15, "best_kernel": "mm", "best_time": 0.06348799914121628, "best_triton_pos": 1, "best_triton_time": 0.08806400001049042, "best_triton_kernel": "triton_mm_26", "best_triton_kernel_desc": "ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4"}
+(EngineCore_DP0 pid=23132) AUTOTUNE mm(4x2048, 2048x2048)
+(EngineCore_DP0 pid=23132) strides: [2048, 1], [1, 2048]
+(EngineCore_DP0 pid=23132) dtypes: torch.bfloat16, torch.bfloat16
+(EngineCore_DP0 pid=23132)   mm 0.0635 ms 100.0% 
+(EngineCore_DP0 pid=23132)   triton_mm_26 0.0881 ms 72.1% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_27 0.0881 ms 72.1% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=4, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_29 0.0881 ms 72.1% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=8
+(EngineCore_DP0 pid=23132)   triton_mm_28 0.0891 ms 71.3% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=2, num_warps=8
+(EngineCore_DP0 pid=23132)   triton_mm_25 0.0922 ms 68.9% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_16 0.0932 ms 68.1% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=2, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_17 0.0942 ms 67.4% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_18 0.0952 ms 66.7% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_19 0.0963 ms 66.0% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132) SingleProcess AUTOTUNE benchmarking takes 0.4969 seconds and 4.4077 seconds precompiling for 16 choices
+(EngineCore_DP0 pid=23132) Autotune Choices Stats:
+(EngineCore_DP0 pid=23132) {"num_choices": 16, "num_triton_choices": 15, "best_kernel": "mm", "best_time": 0.09318400174379349, "best_triton_pos": 1, "best_triton_time": 0.10649599879980087, "best_triton_kernel": "triton_mm_37", "best_triton_kernel_desc": "ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4"}
+(EngineCore_DP0 pid=23132) AUTOTUNE mm(4x2048, 2048x12288)
+(EngineCore_DP0 pid=23132) strides: [2048, 1], [1, 2048]
+(EngineCore_DP0 pid=23132) dtypes: torch.bfloat16, torch.bfloat16
+(EngineCore_DP0 pid=23132)   mm 0.0932 ms 100.0% 
+(EngineCore_DP0 pid=23132)   triton_mm_37 0.1065 ms 87.5% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_40 0.1065 ms 87.5% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_34 0.1075 ms 86.7% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_44 0.1085 ms 85.8% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=8
+(EngineCore_DP0 pid=23132)   triton_mm_31 0.1178 ms 79.1% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=2, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_38 0.1423 ms 65.5% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_42 0.1423 ms 65.5% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=4, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_32 0.1434 ms 65.0% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_36 0.1434 ms 65.0% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=2, num_warps=4
+(EngineCore_DP0 pid=23132) SingleProcess AUTOTUNE benchmarking takes 0.3968 seconds and 0.0057 seconds precompiling for 16 choices
+(EngineCore_DP0 pid=23132) Autotune Choices Stats:
+(EngineCore_DP0 pid=23132) {"num_choices": 16, "num_triton_choices": 15, "best_kernel": "mm", "best_time": 0.0727040022611618, "best_triton_pos": 1, "best_triton_time": 0.08806400001049042, "best_triton_kernel": "triton_mm_59", "best_triton_kernel_desc": "ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=8"}
+(EngineCore_DP0 pid=23132) AUTOTUNE mm(4x6144, 6144x2048)
+(EngineCore_DP0 pid=23132) strides: [6144, 1], [1, 6144]
+(EngineCore_DP0 pid=23132) dtypes: torch.bfloat16, torch.bfloat16
+(EngineCore_DP0 pid=23132)   mm 0.0727 ms 100.0% 
+(EngineCore_DP0 pid=23132)   triton_mm_59 0.0881 ms 82.6% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=8
+(EngineCore_DP0 pid=23132)   triton_mm_47 0.0891 ms 81.6% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_49 0.0891 ms 81.6% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_46 0.0901 ms 80.7% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=128, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=2, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_48 0.0911 ms 79.8% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=32, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=5, num_warps=2
+(EngineCore_DP0 pid=23132)   triton_mm_52 0.0911 ms 79.8% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_55 0.0922 ms 78.9% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=64, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_57 0.0952 ms 76.3% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=64, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=4, num_warps=4
+(EngineCore_DP0 pid=23132)   triton_mm_54 0.1065 ms 68.3% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=16, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=4, num_warps=8
+(EngineCore_DP0 pid=23132) SingleProcess AUTOTUNE benchmarking takes 0.3898 seconds and 0.0005 seconds precompiling for 16 choices
+(EngineCore_DP0 pid=23132) INFO 12-20 13:57:49 [backends.py:278] Compiling a graph for compile range (4, 4) takes 49.96 s
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  67%|████████████████████          | 2/3 [00:51<00:25, 25.76s/it](EngineCore_DP0 pid=23132) INFO 12-20 13:58:03 [backends.py:261] Cache the graph of compile range (1, 1) for later use
+(EngineCore_DP0 pid=23132) INFO 12-20 13:58:44 [backends.py:278] Compiling a graph for compile range (1, 1) takes 53.73 s
+(EngineCore_DP0 pid=23132) INFO 12-20 13:58:44 [monitor.py:34] torch.compile takes 122.53 s in total
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████████████████████████| 3/3 [01:47<00:00, 35.96s/it]
+(EngineCore_DP0 pid=23132) INFO 12-20 13:58:47 [gpu_model_runner.py:4587] Graph capturing finished in 109 secs, took 0.07 GiB
+(EngineCore_DP0 pid=23132) INFO 12-20 13:58:47 [core.py:259] init engine (profile, create kv cache, warmup model) took 136.43 seconds
+INFO 12-20 13:58:48 [llm.py:360] Supported tasks: ['generate']
+Adding requests: 100%|█████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 462.77it/s]
+Processed prompts: 100%|█████████████| 2/2 [00:00<00:00,  7.96it/s, est. speed input: 43.85 toks/s, output: 127.54 toks/s]
+Prompt: 'Hello, how are you?', Generated text: " I'm from the Netherlands, and I'm a little confused about my utility bill"
+Prompt: 'The future of AI is', Generated text: ' here - just not in the lab\n\nBy Clara Lewis, author of The Future'
