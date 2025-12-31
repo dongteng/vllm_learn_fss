@@ -1,8 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
-    <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="Python 3.12" jdkType="Python SDK" />
+    <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/.deps" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/compaction_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/matmul_ogs_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/numerics_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/reduction_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/routing_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/swiglu_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/tensor_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/third_party/triton_kernels/topk_details" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/vllm_flash_attn/layers" />
+      <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/vllm_flash_attn/ops" />
+    </content>
+    <orderEntry type="jdk" jdkName="Remote Python 3.10.19 (sftp://root@192.168.102.104:8034/root/miniconda3/envs/vllm/bin/python3)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">

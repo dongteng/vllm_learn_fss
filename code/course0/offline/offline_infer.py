@@ -13,7 +13,7 @@ prompts = [
 ]
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 
-llm = LLM(model="Qwen/Qwen3-1.7B", enforce_eager=True)
+llm = LLM(model="/data/nas/zhjm/model_cache/docker-shared/Qwen3-1.7B", enforce_eager=True)
 
 outputs = llm.generate(prompts, sampling_params)
 
