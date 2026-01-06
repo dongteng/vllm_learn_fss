@@ -1,4 +1,4 @@
-import multiprocessing as mp
+import multiprocessing as mp #python的多进程库
 import time
 import random
 import os
@@ -12,6 +12,7 @@ def dummy_execute_model(args):
 
 
 def worker(rank: int, work_q: mp.Queue, result_q: mp.Queue):
+
     pid = os.getpid()
     print(f"[Worker {rank}] 启动，pid={pid}")
 
@@ -37,18 +38,19 @@ def worker(rank: int, work_q: mp.Queue, result_q: mp.Queue):
 
 
 def master(num_workers: int = 2):
+    #master只干三件事 1.往wark_q里塞活  2.从result_queues里边收集结果 3.统计谁干完谁退出
     print("=== Master 启动 ===")
-    work_q = mp.Queue()
-    result_queues = [mp.Queue() for _ in range(num_workers)]
+    work_q = mp.Queue() #派工队列：所有worker共享的命令队列：Master往这里边put Worker从里边get
+    result_queues = [mp.Queue() for _ in range(num_workers)] #结果队列 一人一个
     procs = [mp.Process(target=worker, args=(rank, work_q, result_queues[rank]))
-             for rank in range(num_workers)]
+             for rank in range(num_workers)] #创建进程 但还没启动
     for p in procs:
-        p.start()
+        p.start() #这一行后 才真的spawn出紫禁城，worker开始执行，Master不等它们，继续往下跑
 
-    # 等待 READY
+    # 等待 READY  #在worker里 初始化完成后，向自己的result_queue发送一条"READY"
     while sum(rq.get() == "READY" for rq in result_queues) < num_workers:
         pass
-    print(">>> 所有 Worker 就绪 <<<")
+    print(">>> 所有 Worker 就绪 <<<")  #这里还有不就绪的时候？
 
     # 下发 RPC 调用
     calls = [
@@ -56,6 +58,7 @@ def master(num_workers: int = 2):
         ("execute_model", ("scheduler_output_1",), {}),
         ("execute_model", ("scheduler_output_2",), {}),
     ]
+    #calls * num_workers 是什么鬼？第一次见这种写法啊
     for call in calls * num_workers:        # 让每个 Worker 都执行一遍
         work_q.put(call)
 
@@ -74,7 +77,7 @@ def master(num_workers: int = 2):
                     finished += 1
                 else:
                     results[rank].append(item)
-    for p in procs:
+    for p in procs: #等待所有worker进程结束
         p.join()
     print("=== 最终结果汇总 ===")
     for rank, outs in results.items():
@@ -82,5 +85,6 @@ def master(num_workers: int = 2):
 
 
 if __name__ == "__main__":
+    #规定以后创建子进程，用spawn这种启动方式；force=True就算之前已经设hi过 也要强行改成spawn告诉 Python：以后起子进程时，不要“复制我自己”，而是“新开一个干净的 Python 进程”。
     mp.set_start_method("spawn", force=True)
-    master(num_workers=2)
+    master(num_workers=1)

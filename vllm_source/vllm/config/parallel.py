@@ -32,10 +32,10 @@ else:
 
 logger = init_logger(__name__)
 
-ExpertPlacementStrategy = Literal["linear", "round_robin"]
+ExpertPlacementStrategy = Literal["linear", "round_robin"] #Literal是指定几个常量之一
 DistributedExecutorBackend = Literal["ray", "mp", "uni", "external_launcher"]
 DataParallelBackend = Literal["ray", "mp"]
-EPLBPolicyOption = Literal["default"]
+EPLBPolicyOption = Literal["default"] #专家负载均衡策略
 All2AllBackend = Literal[
     "naive",
     "pplx",
@@ -43,11 +43,11 @@ All2AllBackend = Literal[
     "deepep_low_latency",
     "allgather_reducescatter",
     "flashinfer_all2allv",
-]
+] #限制all2all通信策略
 
 
-@config
-@dataclass
+@config #标记类身份 不修改 ，运行时啥也不干
+@dataclass#@dataclass 自动帮你生成常用方法（__init__, __repr__, __eq__ 等），让你不用手动写构造函数和比较方法，专注于定义字段。
 class EPLBConfig:
     """Configuration for Expert Parallel Load Balancing (EP)."""
 
@@ -83,13 +83,13 @@ class EPLBConfig:
 class ParallelConfig:
     """Configuration for the distributed execution."""
 
-    pipeline_parallel_size: int = 1
+    pipeline_parallel_size: int = 1 #流水线并行 Transformer层切成几段
     """Number of pipeline parallel groups."""
-    tensor_parallel_size: int = 1
+    tensor_parallel_size: int = 1 #单层太大 矩阵相乘放不下  多张GPU同时算同一层
     """Number of tensor parallel groups."""
     prefill_context_parallel_size: int = 1
     """Number of prefill context parallel groups."""
-    data_parallel_size: int = 1
+    data_parallel_size: int = 1 #数据并行 存几份模型副本
     """Number of data parallel groups. MoE layers will be sharded according to
     the product of the tensor parallel size and data parallel size."""
     data_parallel_size_local: int = 1
@@ -105,14 +105,14 @@ class ParallelConfig:
     """Port for data parallel messaging."""
     data_parallel_master_port: int = 29500
     """Port of the data parallel master."""
-    data_parallel_backend: DataParallelBackend = "mp"
+    data_parallel_backend: DataParallelBackend = "mp" #'mp' = Python multiprocessing， 还有ray
     """Backend to use for data parallel, either "mp" or "ray"."""
-    data_parallel_external_lb: bool = False
+    data_parallel_external_lb: bool = False #external_lb=False：不用外部（如 nginx / envoy） vLLM 自己内部调度请求
     """Whether to use "external" DP LB mode. Applies only to online serving
     and when data_parallel_size > 0. This is useful for a "one-pod-per-rank"
     wide-EP setup in Kubernetes. Set implicitly when --data-parallel-rank
     is provided explicitly to vllm serve."""
-    data_parallel_hybrid_lb: bool = False
+    data_parallel_hybrid_lb: bool = False #hybrid_lb=False：不混合策略
     """Whether to use "hybrid" DP LB mode. Applies only to online serving
     and when data_parallel_size > 0. Enables running an AsyncLLM
     and API server on a "per-node" basis where vLLM load balances
@@ -144,12 +144,12 @@ class ParallelConfig:
     - "deepep_low_latency": Use deepep low-latency kernels\n
     - "flashinfer_all2allv": Use flashinfer alltoallv kernels for mnnvl"""
 
-    max_parallel_loading_workers: int | None = None
+    max_parallel_loading_workers: int | None = None #模型加载时能开多少线程，None是vllm自己决定
     """Maximum number of parallel loading workers when loading model
     sequentially in multiple batches. To avoid RAM OOM when using tensor
     parallel and large models."""
 
-    disable_custom_all_reduce: bool = False
+    disable_custom_all_reduce: bool = False #False = 使用 vLLM 优化过的 AllReduce
     """Disable the custom all-reduce kernel and fall back to NCCL."""
 
     enable_dbo: bool = False

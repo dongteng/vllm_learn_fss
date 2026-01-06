@@ -1007,26 +1007,30 @@ class EngineCoreProc(EngineCore):
                 "vLLM shutdown signal from EngineCore failed "
                 "to send. Please report this issue."
             )
-
+    #独立IO线程，同时监听多个输入socket,把收到的二进制消息解析成Python请求对象，再安全 非堵塞的送进engine的输入队列
     def process_input_sockets(
         self,
-        input_addresses: list[str],
-        coord_input_address: str | None,
-        identity: bytes,
-        ready_event: threading.Event,
+        input_addresses: list[str], #多个输入 socket 地址列表（要连接的客户端或服务端地址）
+        coord_input_address: str | None,#协调器（coordinator）的地址，可选
+        identity: bytes,                #这个线程/套接字的身份标识，用于 ROUTER/DEALER 异步通信
+        ready_event: threading.Event,  #线程事件，用于通知外部“socket 已准备好”
     ):
         """Input socket IO thread."""
 
-        # Msgpack serialization decoding.
-        add_request_decoder = MsgpackDecoder(EngineCoreRequest)
-        generic_decoder = MsgpackDecoder()
+        # Msgpack serialization decoding. #初始化消息解码器
+        add_request_decoder = MsgpackDecoder(EngineCoreRequest)  #专门解码EngineCoreRequest类型的请求
+        generic_decoder = MsgpackDecoder()                  #通用解码器，可解码任意类型的请求
 
+        #创建上下文和ExitStack
+        #zmq.Context()：创建一个新的ZeroMQ上下文，用于管理套接字和 I/O 线程
+        #ExitStack()：用于 自动管理多个资源（套接字、文件等），退出时自动关闭
         with ExitStack() as stack, zmq.Context() as ctx:
+            #1.创建zmq套接字和客户端连接
+            #stack.enter_context(...)：把 socket 注册到 ExitStack，确保线程结束时自动关闭
+            #make_zmq_socket 返回的对象是一个 zmq.Socket 对象，每个socket已经连接到对应地址，类型是DEALER
             input_sockets = [
                 stack.enter_context(
-                    make_zmq_socket(
-                        ctx, input_address, zmq.DEALER, identity=identity, bind=False
-                    )
+                    make_zmq_socket(ctx, input_address, zmq.DEALER, identity=identity, bind=False)
                 )
                 for input_address in input_addresses
             ]
@@ -1051,6 +1055,8 @@ class EngineCoreProc(EngineCore):
                 # Send initial message to each input socket - this is required
                 # before the front-end ROUTER socket can send input messages
                 # back to us.
+                # 将套接字注册到poller中，让内核关注套接字的读写事件
+                #为什么一上来要发一个空消息？原因ROUTER ↔ DEALER 通信时，ROUTER 不知道 DEALER 的 identity，直到 DEALER 先发过消息
                 input_socket.send(b"")
                 poller.register(input_socket, zmq.POLLIN)
 
@@ -1058,13 +1064,16 @@ class EngineCoreProc(EngineCore):
                 # Wait for ready message from coordinator.
                 assert coord_socket.recv() == b"READY"
                 poller.register(coord_socket, zmq.POLLIN)
-
+            #通知外部线程自己就绪
             ready_event.set()
+            #删除引用，避免泄露
             del ready_event
             while True:
                 for input_socket, _ in poller.poll():
                     # (RequestType, RequestData)
+                    #接收来自客户端的请求数据
                     type_frame, *data_frames = input_socket.recv_multipart(copy=False)
+                    #将第一段bytes转成枚举类型 用于判断后续如何解码和处理
                     request_type = EngineCoreRequestType(bytes(type_frame.buffer))
 
                     # Deserialize the request data.
@@ -1077,16 +1086,19 @@ class EngineCoreProc(EngineCore):
                             self._handle_request_preproc_error(req)
                             continue
                     else:
+                        #其他类型 用通用解码器generic_decoder解码
                         request = generic_decoder.decode(data_frames)
-
+                        #ABORT类型请求：放入aborts_queue, 保证尽快处理，但不破坏原队列顺序
                         if request_type == EngineCoreRequestType.ABORT:
                             # Aborts are added to *both* queues, allows us to eagerly
                             # process aborts while also ensuring ordering in the input
                             # queue to avoid leaking requests. This is ok because
                             # aborting in the scheduler is idempotent.
                             self.aborts_queue.put_nowait(request)
-
+                    #放到engine的待处理队列中
                     # Push to input queue for core busy loop.
+                    #为什么是put_nowait？ 因为这里是IO线程，不能阻塞，如果不用put_await 如果input_queue满了会堵塞
+                    #put_nowait 如果有空间立即放进去，满了立刻抛出异常 绝不会等待
                     self.input_queue.put_nowait((request_type, request))
 
     def process_output_sockets(
