@@ -37,7 +37,7 @@ def flash_attention_v1_kernel(
     m_size,
     n_size,  # sequence length of k, also be rows of K matrix
     BLOCK_DHEAD_SIZE: tl.constexpr,  # head_dim dimension
-    BLOCK_M_SIZE: tl.constexpr,  # BLOCK size of m_size dimension，即 Q 矩阵行数分成了m_size // BLOCK_M_SIZE 块，块大小是 BLOCK_M_SIZE
+    BLOCK_M_SIZE: tl.constexpr,  # BLOCK size of m_size dimension，即 Q 矩阵行数分成了(m_size // BLOCK_M_SIZE) 块，块大小是 BLOCK_M_SIZE
     BLOCK_N_SIZE: tl.constexpr,  # n_size dimension
     sm_scale,
     causal_mask,
@@ -45,25 +45,29 @@ def flash_attention_v1_kernel(
     """
     flashattention 内核实现
     """
-    block_m_idx = tl.program_id(0)
-    head_idx = tl.program_id(1)
+    block_m_idx = tl.program_id(0) #获取当前正在执行的block的索引 axis=-表示拿网格第0维的索引；表示当前这个kernel block正在处理Q的第几个M-tile(第几块查询token)
+    head_idx = tl.program_id(1) #当前block正在处理的全局head索引（从0开始到batch_size* heads的总数）
 
     cur_batch_idx = head_idx // n_heads
     cur_head_idx = head_idx % n_heads
 
-    cur_kv_head_idx = cur_head_idx // num_kv_groups
+    cur_kv_head_idx = cur_head_idx // num_kv_groups #意思是当前query head对应到哪个kv head
 
-    m_range_offs = tl.arange(0, BLOCK_M_SIZE)
-    n_range_offs = tl.arange(0, BLOCK_N_SIZE)  # head_dim 维度偏移
-    dhead_range_offs = tl.arange(0, BLOCK_DHEAD_SIZE)
+    m_range_offs = tl.arange(0, BLOCK_M_SIZE)  #当前block内，要处理的 Q的行偏移
+    n_range_offs = tl.arange(0, BLOCK_N_SIZE)  #当前block内，要处理的 K V的行偏移
+    dhead_range_offs = tl.arange(0, BLOCK_DHEAD_SIZE) #这才是真正的head维度的偏移
 
-    m_offs = block_m_idx * BLOCK_M_SIZE + m_range_offs
+    m_offs = block_m_idx * BLOCK_M_SIZE + m_range_offs #计算当前block正在处理的Q矩阵的全局行号
 
     # Compute offsets for the first block on matrix Q K V Output
+    #计算 当前block 要从q内存中读取的全部元素的起始地址偏移量  就是BLOCK_M_SIZE * BLOCK_DHEAD_SIZE 这么大小的块
+    #这里其实是定位的问题，先找到是哪个批次，再找到哪个head，最后就是用行号+列号
+    #我咋感觉这个 dhead_range_offs定位不到呢？ 比如说dim0 dim1  dim2 dim3这里也区分不出来吧？ 难道说这里是triton并行做的？ 是我想错了第二维度就是head啊
+
     q_offs = (
         cur_batch_idx * q_batch_stride
         + cur_head_idx * q_heads_stride
-        + (m_offs[:, None] * q_seq_stride + dhead_range_offs[None, :] * q_dim_stride)
+        + (m_offs[:, None] * q_seq_stride + dhead_range_offs[None, :] * q_dim_stride) #这里最后其实没必要*q_dim_stride
     )
 
     k_offs = (
@@ -92,23 +96,29 @@ def flash_attention_v1_kernel(
             + dhead_range_offs[None, :] * out_dim_stride
         )
     )
-
+    #这里不理解，上边不是定位到了吗？为什么还加上q_ptr?因为q_offs是一个相对位置，
     q_ptrs = q_ptr + q_offs
-    k_ptrs = k_ptr + k_offs
+    k_ptrs = k_ptr + k_offs #k_offs 是形状为 [BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]
     v_ptrs = v_ptr + v_offs
     out_ptrs = o_ptr + o_offs
 
     # 初始化用于计算 softmax 归一化项的 m 和 d, 意义见 online-softmax, 这里
-    l_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32) - float("inf")
-    d_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32)
-    acc = tl.zeros((BLOCK_M_SIZE, BLOCK_DHEAD_SIZE), dtype=tl.float32)
+    l_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32) - float("inf") #记录qk 每一行的最大值
+    d_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32)                #记录qk 每一行的累积（exp(qk-max)）
+    acc = tl.zeros((BLOCK_M_SIZE, BLOCK_DHEAD_SIZE), dtype=tl.float32) #输出O的累加器 最终结果
 
+    #加载Q分块 ，这里其实有隐藏的Triton并行在这
     q_mask = m_offs[:, None] < m_size
     q = tl.load(q_ptrs, mask=q_mask, other=0.0)
 
+    # 逐块加载 K V，这里其实可以看PPT的abc分块 这个遍历主要是遍历蓝色那个竖条，我突然好奇 为什么是第二列？为啥不是第3列？
     for block_n_start_idx in range(0, n_size, BLOCK_N_SIZE):
-        block_n_offs = block_n_start_idx + n_range_offs
+        block_n_offs = block_n_start_idx + n_range_offs #当前block正在处理的K V矩阵的行偏移
         k_mask = block_n_offs[:, None] < n_size
+
+        #不理解这块加载了多大啊？
+        #首先要知道k_ptrs = k_ptr + k_offs ，k_offs 是形状为 [BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]
+        #原来这个定位在k_offs中已经被解决了
         k = tl.load(k_ptrs + block_n_start_idx * k_seq_stride, mask=k_mask, other=0.0)
 
         qk = tl.zeros((BLOCK_M_SIZE, BLOCK_N_SIZE), dtype=tl.float32)
