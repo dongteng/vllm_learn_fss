@@ -74,8 +74,8 @@ def flash_attention_v1_kernel(
         cur_batch_idx * k_batch_stride
         + cur_kv_head_idx * k_heads_stride
         + (
-            n_range_offs[:, None] * k_seq_stride
-            + dhead_range_offs[None, :] * k_dim_stride
+            n_range_offs[:, None] * k_seq_stride        #这决定行
+            + dhead_range_offs[None, :] * k_dim_stride  #这决定列
         )
     )
 
@@ -118,42 +118,45 @@ def flash_attention_v1_kernel(
 
         #不理解这块加载了多大啊？
         #首先要知道k_ptrs = k_ptr + k_offs ，k_offs 是形状为 [BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]
-        #原来这个定位在k_offs中已经被解决了
+        #这个block_n_offs能定义加载哪几行，k分块的哪几列是哪里决定的？比如说我这个[2,2,6,4]的K矩阵,  已知q分块为1*1，K分块是2*1,但是K的列定位是哪里知道的？
+        #K 本身没有沿着 d_head 分块，每次加载的 K 小块在维度上是完整的。令震惊了哦！
         k = tl.load(k_ptrs + block_n_start_idx * k_seq_stride, mask=k_mask, other=0.0)
 
-        qk = tl.zeros((BLOCK_M_SIZE, BLOCK_N_SIZE), dtype=tl.float32)
-        qk += tl.dot(q, tl.trans(k))
+        qk = tl.zeros((BLOCK_M_SIZE, BLOCK_N_SIZE), dtype=tl.float32) #为啥要设定一个形状先
+        qk += tl.dot(q, tl.trans(k)) #为啥不能直接有这一句？在 Triton 中，tl.dot 本身不会自动创建输出缓冲区，它只是执行矩阵乘法运算，并把结果写到你已经准备好的目标张量里。
 
         # 应用因果遮罩
         if causal_mask:
             offs_k = block_n_offs
             offs_m = m_offs
             # casual 模型的 causal mask 下三角矩阵
-            mask = offs_m[:, None] >= offs_k[None, :]
+            mask = offs_m[:, None] >= offs_k[None, :]  #这个比较也会发生广播的，行号大于 K的行号的 都会被mask掉
             # mask = offs_m[:, None] < offs_k[None, :]
-            qk = tl.where(mask, qk * sm_scale, -1.0e8)
+            qk = tl.where(mask, qk * sm_scale, -1.0e8) #where的作用是 保留mask为True的，其余的全体换为-1.0e8
         else:
             qk = qk * sm_scale
 
-        l_j = tl.max(qk, 1)
-        numerators = tl.exp(qk - l_j[:, None])
-        d_j = tl.sum(numerators, 1)  # 1d vector
+        l_j = tl.max(qk, 1)        #找到本块注意力矩阵 每行的最大值
+        # numerators = tl.exp(qk - l_j) #这里为什么不能写成这样  难道不是有自动广播计算吗？ 此处看笔记
+        numerators = tl.exp(qk - l_j[:, None])  #当前块 注意力矩阵的 exp值
+        d_j = tl.sum(numerators, 1)  # 1d vector  当前块每行的exp之和（局部分母和）
 
-        l_new = tl.maximum(l_i, l_j)
-        alpha = tl.exp(l_i - l_new)
-        beta = tl.exp(l_j - l_new)
-        d_new = alpha * d_i + beta * d_j
+        #现在进入最关键部分，在线合并softmax
+        l_new = tl.maximum(l_i, l_j)     #到目前为止 每行的全局最大和。l_i之前所有block的全局最大值，l_j 当前block 注意力的最大值
+        alpha = tl.exp(l_i - l_new)      #历史最大值 相对于 新最大值的缩放因子
+        beta = tl.exp(l_j - l_new)       #当前块相对于 新最大值的缩放因子，如果新最大值就是本块产生的，那么beta就是1
+        d_new = alpha * d_i + beta * d_j ## 新总分母 = 历史分母×缩放 + 当前分母×缩放
 
         # compute softmax(qk)
-        p_scale = beta / d_new
-        p = numerators * p_scale[:, None]
+        p_scale = beta / d_new           #这里为啥用beta   直接下一行不行？ 哦 它是想统一分子，到目前为止numerators还没放缩呢
+        p = numerators * p_scale[:, None] #把当前小块的局部exp值，缩放成真正意义上的softmax值
         # acc scaling
-        sigma = d_i / d_new * alpha
-        acc = acc * sigma[:, None]
+        sigma = d_i / d_new * alpha      #对之前整体acc进行缩放，
+        acc = acc * sigma[:, None]       #acc = Σ [ exp(qk - l_i) / d_i ] · V
 
         # compute O = PV
         v = tl.load(v_ptrs + block_n_start_idx * v_seq_stride, mask=k_mask, other=0.0)
-        p = p.to(q_ptr.dtype.element_ty)
+        p = p.to(q_ptr.dtype.element_ty) #把注意力概率p转换成和Q相同得到数据类型
 
         acc += tl.dot(p, v)
 
@@ -162,7 +165,7 @@ def flash_attention_v1_kernel(
         d_i = d_new
 
     out_mask = m_offs[:, None] < m_size
-    tl.store(out_ptrs, acc, mask=out_mask)
+    tl.store(out_ptrs, acc, mask=out_mask)#当前结果写回全局内存中的位置
 
 
 @torch.no_grad()
