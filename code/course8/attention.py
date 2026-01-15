@@ -136,10 +136,16 @@ def flash_attention_v1_kernel(
         else:
             qk = qk * sm_scale
 
-        l_j = tl.max(qk, 1)        #找到本块注意力矩阵 每行的最大值
+        #更新前要明确三个变量
+        # l_i :到目前为止所有处理过的块中，全局最大logit（之前所有qk的最大值）
+        # d_i ：到目前为止，所有已处理的归一化分母累积和（相当于 Σ exp(qk - l_i) 的总和，经过缩放调整）
+        # acc: 到目前为止累积的输出向量,acc = Σ [exp(qk - l_i) / d_i] · V   ← 这是我们最想得到的最终形式
+
+
+        l_j = tl.max(qk, 1)        #找到本块注意力矩阵 每行的最大值，后边居然是个1？ cao  是纬度值
         # numerators = tl.exp(qk - l_j) #这里为什么不能写成这样  难道不是有自动广播计算吗？ 此处看笔记
-        numerators = tl.exp(qk - l_j[:, None])  #当前块 注意力矩阵的 exp值
-        d_j = tl.sum(numerators, 1)  # 1d vector  当前块每行的exp之和（局部分母和）
+        numerators = tl.exp(qk - l_j[:, None])  #当前块 注意力矩阵的 exp值,  numerators_{i,j} = exp( (q_i · k_j) - l_j )
+        d_j = tl.sum(numerators, 1)  # 1d vector  当前块每行的exp之和（局部分母和）,d_j = Σ_j exp( (q_i · k_j) - l_j )
 
         #现在进入最关键部分，在线合并softmax
         l_new = tl.maximum(l_i, l_j)     #到目前为止 每行的全局最大和。l_i之前所有block的全局最大值，l_j 当前block 注意力的最大值
@@ -151,7 +157,7 @@ def flash_attention_v1_kernel(
         p_scale = beta / d_new           #这里为啥用beta   直接下一行不行？ 哦 它是想统一分子，到目前为止numerators还没放缩呢
         p = numerators * p_scale[:, None] #把当前小块的局部exp值，缩放成真正意义上的softmax值
         # acc scaling
-        sigma = d_i / d_new * alpha      #对之前整体acc进行缩放，
+        sigma = d_i / d_new * alpha      #对之前整体acc进行缩放， 这里acc就是O
         acc = acc * sigma[:, None]       #acc = Σ [ exp(qk - l_i) / d_i ] · V
 
         # compute O = PV
