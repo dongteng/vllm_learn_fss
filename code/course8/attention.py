@@ -32,7 +32,7 @@ def flash_attention_v1_kernel(
     out_heads_stride,
     out_seq_stride,
     out_dim_stride,
-    num_kv_groups,  # group of kv heads
+    num_kv_groups,  # group of kv heads 多少个q head 共享同一个 k v head
     n_heads,  # number of heads
     m_size,
     n_size,  # sequence length of k, also be rows of K matrix
@@ -64,12 +64,22 @@ def flash_attention_v1_kernel(
     #这里其实是定位的问题，先找到是哪个批次，再找到哪个head，最后就是用行号+列号
     #我咋感觉这个 dhead_range_offs定位不到呢？ 比如说dim0 dim1  dim2 dim3这里也区分不出来吧？ 难道说这里是triton并行做的？ 是我想错了第二维度就是head啊
 
+    #前边已经有行号m_offs了，为什么还要q_offs？
+    # 这一整行在做的事是：
+    # 把上面得到的行号（m_offs）和维度号（dhead_range_offs），
+    # 结合batch / head / stride
+    # 信息，转换成内存里每个元素的真实偏移量（字节数）。
+    # 最终q_offs的形状是：
+    # [BLOCK_M_SIZE, BLOCK_DHEAD_SIZE]比如[128, 128]
+    # 里面的每一个元素都是一个数字，表示：
+    # 从q_ptr这个基地址开始，要偏移多少个元素（或字节）才能到达对应的Q值
     q_offs = (
         cur_batch_idx * q_batch_stride
         + cur_head_idx * q_heads_stride
         + (m_offs[:, None] * q_seq_stride + dhead_range_offs[None, :] * q_dim_stride) #这里最后其实没必要*q_dim_stride
     )
-
+    #为什么q_offs用的m_offs? 为什么k_offs用的n_range_offs?
+    #取的是哪些 key token（行）,这些 key token 的位置信息由 n_range_offs + block_n_start_idx 决定。
     k_offs = (
         cur_batch_idx * k_batch_stride
         + cur_kv_head_idx * k_heads_stride
@@ -96,16 +106,17 @@ def flash_attention_v1_kernel(
             + dhead_range_offs[None, :] * out_dim_stride
         )
     )
-    #这里不理解，上边不是定位到了吗？为什么还加上q_ptr?因为q_offs是一个相对位置，
+    #这里不理解，上边不是定位到了吗？为什么还加上q_ptr?因为q_offs只是“相对偏移量”（一个数字矩阵），它告诉你“要从起点跳多少步”
+    #q_ptr 才是真正的“起点地址”
     q_ptrs = q_ptr + q_offs
-    k_ptrs = k_ptr + k_offs #k_offs 是形状为 [BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]
+    k_ptrs = k_ptr + k_offs #[BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]，但里面的每个值现在都是真正的内存指针（绝对地址），可以直接用来从全局内存读取数据。
     v_ptrs = v_ptr + v_offs
     out_ptrs = o_ptr + o_offs
 
     # 初始化用于计算 softmax 归一化项的 m 和 d, 意义见 online-softmax, 这里
-    l_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32) - float("inf") #记录qk 每一行的最大值
+    l_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32) - float("inf") #记录qk 每一行的最大值 不是 [BLOCK_M_SIZE, 1]，而是单纯的 [BLOCK_M_SIZE]（一维向量）
     d_i = tl.zeros((BLOCK_M_SIZE,), dtype=tl.float32)                #记录qk 每一行的累积（exp(qk-max)）
-    acc = tl.zeros((BLOCK_M_SIZE, BLOCK_DHEAD_SIZE), dtype=tl.float32) #输出O的累加器 最终结果
+    acc = tl.zeros((BLOCK_M_SIZE, BLOCK_DHEAD_SIZE), dtype=tl.float32) #输出O的累加器 最终结果 这个数据类型一般是多少？
 
     #加载Q分块 ，这里其实有隐藏的Triton并行在这
     q_mask = m_offs[:, None] < m_size
@@ -120,6 +131,9 @@ def flash_attention_v1_kernel(
         #首先要知道k_ptrs = k_ptr + k_offs ，k_offs 是形状为 [BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]
         #这个block_n_offs能定义加载哪几行，k分块的哪几列是哪里决定的？比如说我这个[2,2,6,4]的K矩阵,  已知q分块为1*1，K分块是2*1,但是K的列定位是哪里知道的？
         #K 本身没有沿着 d_head 分块，每次加载的 K 小块在维度上是完整的。令震惊了哦！
+        #那我就不理解了 k_ptrs是一整块[BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]，加上block_n_start_idx * k_seq_stride是什么意思？那岂不是还是[BLOCK_N_SIZE, BLOCK_DHEAD_SIZE]
+        #不理解k_ptrs 与 blcok_n_offs的区别。
+        #这里为什么不是tl.load(k_ptrs) 后边的 block_n_start_idx * k_seq_stride 是在干什么？我理解k_ptrs已经定位了，我擦！k_ptrs是第一块的定位
         k = tl.load(k_ptrs + block_n_start_idx * k_seq_stride, mask=k_mask, other=0.0)
 
         qk = tl.zeros((BLOCK_M_SIZE, BLOCK_N_SIZE), dtype=tl.float32) #为啥要设定一个形状先
@@ -130,6 +144,7 @@ def flash_attention_v1_kernel(
             offs_k = block_n_offs
             offs_m = m_offs
             # casual 模型的 causal mask 下三角矩阵
+            # 这样整成二维矩阵了
             mask = offs_m[:, None] >= offs_k[None, :]  #这个比较也会发生广播的，行号大于 K的行号的 都会被mask掉
             # mask = offs_m[:, None] < offs_k[None, :]
             qk = tl.where(mask, qk * sm_scale, -1.0e8) #where的作用是 保留mask为True的，其余的全体换为-1.0e8

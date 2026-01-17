@@ -53,7 +53,7 @@ def flash_attention_v1_kernel(
         out_heads_stride,
         out_seq_stride,
         out_dim_stride,
-        num_kv_groups,  # group of kv heads
+        num_kv_groups,  # group of kv heads  意思是多少个q head 共享同一个k v head
         n_heads,  # number of heads
         m_size,  # sequence length of q
         n_size,  # sequence length of k
@@ -64,69 +64,47 @@ def flash_attention_v1_kernel(
         causal_mask
 ):
     """
-    flashattention内核实现
+    flash attention内核实现
     """
-    block_m_idx = tl.program_id(0)
-    head_idx = tl.program_id(1) #这个是 bs * n_heads 的索引。
+    block_m_idx = tl.program_id(0) #当前block在m_size方向的索引
+    head_idx = tl.program_id(1) #当前block在head方向索引
 
-    cur_batch_idx = head_idx // n_heads #看ppt图示
-    cur_head_idx = head_idx % n_heads   #Q head在batch内的index
+    cur_batch_id = head_idx // n_heads
+    cur_head_idx = head_idx % n_heads
 
-    #首先要知道num_kv_groups 是指一个 k v head被多少个Q head共享
-    #就按照GQA来想   假设q.shape[1] = 8  k.shape[1] = 2，则num_kv_groups=4 ,
-    cur_kv_head_idx = cur_head_idx // num_kv_groups  #这个 Q head 对应的 K/V head index
+    #当前分块对应那个kv 头
+    cur_kv_head_idx  = cur_head_idx // num_kv_groups
 
-    m_range_offs = tl.arange(0,BLOCK_M_SIZE)
-    n_range_offs = tl.arange(0,BLOCK_N_SIZE)
-    dhead_range_offs = tl.arange(0,BLOCK_DHEAD_SIZE) #这个是 head_dim 维度
+    m_range_offs = tl.arange(0, BLOCK_M_SIZE) #q 块 m_size 方向的索引
+    n_range_offs = tl.arange(0, BLOCK_N_SIZE) #kv 块 n_size 方向的索引
+    dhead_range_offs = tl.arange(0, BLOCK_DHEAD_SIZE) #块内 head_dim 方向的索引
 
-    m_offs = block_m_idx * BLOCK_M_SIZE + m_range_offs #这倒是容易理解啊 该线程块在Grid下负责的行索引
+    m_offs = block_m_idx * BLOCK_M_SIZE + m_range_offs #q分块 行的全局索引
 
-    #算当前block内元素的全局索引
-    q_offs = (cur_batch_idx* q_batch_stride + cur_head_idx*q_heads_stride + m_offs*q_seq_stride
-        +( m_offs[:,None]*q_seq_stride + dhead_range_offs*q_dim_stride)
-              )
-    k_offs = (
-        cur_batch_idx * k_batch_stride + cur_kv_head_idx * k_heads_stride + (
-            n_range_offs[:,None] * k_seq_stride + dhead_range_offs * k_dim_stride
-    )
-    )
-    v_offs = (
-            cur_batch_idx * v_batch_stride
-            + cur_kv_head_idx * v_heads_stride
-            + (
-                    n_range_offs[:, None] * v_seq_stride
-                    + dhead_range_offs[None, :] * v_dim_stride
-            )
-    )
-
-    o_offs = (
-            cur_batch_idx * out_batch_stride
-            + cur_head_idx * out_heads_stride
-            + (
-                    m_offs[:, None] * out_seq_stride
-                    + dhead_range_offs[None, :] * out_dim_stride
-            )
-    )
+    q_offs = cur_batch_id* q_batch_stride + cur_head_idx*q_heads_stride + m_offs*q_seq_stride[:,None] + dhead_range_offs*q_dim_stride[None,:]
+    #为什么q_offs用的m_offs? 为什么k_offs用的n_range_offs?
+    k_offs = cur_batch_id*k_batch_stride + cur_kv_head_idx* k_heads_stride + n_range_offs*k_seq_stride[:,None] + dhead_range_offs*k_dim_stride[None,:]
+    v_offs = cur_batch_id*v_batch_stride + cur_kv_head_idx*v_heads_stride + n_range_offs*v_seq_stride[:,None] + dhead_range_offs*v_dim_stride[None,:]
+    o_offs = cur_batch_id*out_batch_stride + cur_head_idx*out_heads_stride + m_offs*out_seq_stride[:,None] + dhead_range_offs*out_dim_stride[None,:]
 
     q_ptrs = q_ptr + q_offs
     k_ptrs = k_ptr + k_offs
     v_ptrs = v_ptr + v_offs
     o_ptrs = o_ptr + o_offs
 
-    l_i  = tl.zeros((BLOCK_M_SIZE), dtype=tl.float32) - float('inf')
-    d_i = tl.zeros((BLOCK_M_SIZE), dtype=tl.float32)
+    #准备计算  要记录行最大值; 注意力矩阵每行的累计值（exp(qk - max)）; 输出O的累积值
+    l_i = tl.zeros((BLOCK_M_SIZE,),dtype = tl.float32) - float('inf')
+    d_i = tl.zeros((BLOCK_M_SIZE,),dtype = tl.float32)
     acc = tl.zeros((BLOCK_M_SIZE, BLOCK_DHEAD_SIZE), dtype=tl.float32)
 
     q_mask = m_offs[:,None] < m_size
-    q = tl.load(q_ptrs, mask = q_mask, other=0.0)
-
-    for block_n_start_idx in range(0,n_size,BLOCK_N_SIZE):
+    q = tl.load(q_ptrs,mask=q_mask, other=0.0)
+    #开算
+    for block_n_start_idx in range(0,n_size, BLOCK_N_SIZE):
         block_n_offs = block_n_start_idx + n_range_offs
         k_mask = block_n_offs[:,None] < n_size
-        #现在的k分块维度是多少？这里怎么还在变呢？上边不是已经挪动位置了？
-        #k_ptr是
-        k = tl.load(k_ptrs + block_n_start_idx*k_seq_stride, mask=k_mask, other=0.0)
+        #加载 k v块
+        k = tl.load(k_ptrs + block_n_start_idx*k_seq_stride,mask=k_mask,other=0.0)
 
         qk = tl.zeros((BLOCK_M_SIZE, BLOCK_N_SIZE), dtype=tl.float32)
         qk += tl.dot(q,tl.trans(k))
@@ -134,36 +112,41 @@ def flash_attention_v1_kernel(
         if causal_mask:
             offs_k = block_n_offs
             offs_m = m_offs
-            mask = offs_m[:,None] <= offs_k[None,:]
-            qk = tl.where(mask, qk*sm_scale, -1.0e8)
+            mask = offs_m[:,None] >= offs_k[None,:]
+            qk = tl.where(mask, -float('inf'), -1e08)
         else:
             qk = qk * sm_scale
 
-        l_j = tl.max(qk, 1)
-        numerators = tl.exp(qk- l_j[:,None]) #这里写成tl.exp(qk- l_j)也行吧？会广播吧？
-        d_j = tl.sum(numerators, 1)
+        #局部块算完了 现在开始更新了
+        l_j = tl.max(qk, axis=1) #计算当前块 qk 的最大值
+        numerators = tl.exp(qk - l_j[:,None]) #计算 exp(qk - max)
+        d_j = tl.sum(numerators,axis =1)
 
-        l_new = tl.maximum(l_i, l_j)
+        #在线合并softmax
+        l_new = tl.max(l_i,l_j)
+        #计算放缩因子
         alpha = tl.exp(l_i - l_new)
         beta = tl.exp(l_j - l_new)
-        d_new = alpha*d_i + beta*d_j
 
-        #compute softmax(qk)
-        p_scale = beta / d_new
-        p = numerators * p_scale[:,None]
+        d_new = d_i * alpha  + d_j * beta
 
-        sigma = d_i / d_new *alpha
-        acc = acc * sigma[:,None]
 
-        v = tl.load(v_ptrs+ block_n_start_idx *v_seq_stride,mask=k_mask, other=0.0)
-        p = p.tp(q_ptr.dtype.element_ty)
+        #原本numerators是利用局部最大值l_j算出来的 ，现在要放缩一下
+        p = numerators * beta[:,None] / d_new[:,None]
+
+        #对acc放缩，acc = Σ [ exp(qk - l_i) / d_i ] · V  看公式就知道了 分子仙剑去了旧的最大值 除以了旧的分母累计值
+        acc = acc* (tl.exp(l_i-l_new)) * (d_i/ d_new) #中间括号是放缩分子 后边括号是放缩分母
+
+        #计算 o = pv
+        v = tl.load(v_ptrs + block_n_start_idx*v_seq_stride,mask=k_mask,other=0.0)
+        p = p.to(q_ptr.dtype.element_ty)
 
         acc += tl.dot(p, v)
 
         l_i = l_new
         d_i = d_new
-    out_mask = m_offs[:,None] < m_size
-    tl.store(o_ptrs, acc, mask=out_mask)
+
+
 
 
 @torch.no_grad
