@@ -19,8 +19,8 @@ class SimpleColumnParallelLinear(nn.Module):
     def forward(self, x):
         # x: [batch, input_size]
         parts = [lin(x) for lin in self.linears]  # 每个部分if self.gather_output:
-            return torch.cat(parts, dim=-1)        # 拼接得到完整 yelse:
-            return parts                           # 返回子结果列表# 测试
+        return torch.cat(parts, dim=-1)        # 拼接得到完整 yelse:
+            # return parts                           # 返回子结果列表# 测试
 batch, in_dim, out_dim = 4, 8, 12
 tp_size = 4
 
