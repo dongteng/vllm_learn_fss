@@ -1,6 +1,6 @@
 import os
 import time
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 os.environ["VLLM_USE_V1"] = "1"  # 必须在 import vllm 之前！
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
@@ -22,7 +22,7 @@ def main():
         model="/data/nas/zhjm/model_cache/docker-shared/Qwen3-1.7B",
         max_model_len=4096,
         max_num_seqs=128,#最多同时调度128条序列
-        gpu_memory_utilization=0.9,
+        gpu_memory_utilization=0.4,
         disable_log_stats=False,
     )
 

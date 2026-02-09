@@ -104,11 +104,11 @@ from vllm.version import __version__ as VLLM_VERSION
 prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
 # Cannot use __name__ (https://github.com/vllm-project/vllm/pull/4765)
-logger = init_logger("vllm.entrypoints.openai.api_server")
+logger = init_logger("vllm.entrypoints.openai.api_server") #某些场景下会出现问题，所以硬编码了这个字符
 
 ENDPOINT_LOAD_METRICS_FORMAT_HEADER_LABEL = "endpoint-load-metrics-format"
 
-_running_tasks: set[asyncio.Task] = set()
+_running_tasks: set[asyncio.Task] = set() #全局维护一个集合，用来记录所有我们自己创建的、还在后台跑的 asyncio 任务。目的是：服务要关闭时能把这些任务都取消掉，避免“任务泄漏”。
 
 
 @asynccontextmanager
@@ -122,9 +122,9 @@ async def lifespan(app: FastAPI):
                     await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
                     await engine_client.do_log_stats()
 
-            task = asyncio.create_task(_force_log())
+            task = asyncio.create_task(_force_log()) #创建按异步任务 把协程丢进 event loop 并发执行
             _running_tasks.add(task)
-            task.add_done_callback(_running_tasks.remove)
+            task.add_done_callback(_running_tasks.remove) #给任务绑定一个回调：任务结束/取消/异常时自动从集合里把自己删掉（非常干净的写法
         else:
             task = None
 
@@ -132,7 +132,7 @@ async def lifespan(app: FastAPI):
         # Reduces pause times of oldest generation collections.
         freeze_gc_heap()
         try:
-            yield
+            yield  #yield 控制权交给fastapi,让它真正接收请求
         finally:
             if task is not None:
                 task.cancel()
@@ -1381,7 +1381,7 @@ if __name__ == "__main__":
     # NOTE(simon):
     # This section should be in sync with vllm/entrypoints/cli/main.py for CLI
     # entrypoints.
-    cli_env_setup()
+    cli_env_setup() #设置多进程启动方式为spawn
     parser = FlexibleArgumentParser(
         description="vLLM OpenAI-Compatible RESTful API server."
     )

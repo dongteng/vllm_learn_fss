@@ -47,7 +47,7 @@ class SchedulerConfig:
     runner_type: RunnerType = "generate"
     """The runner type to launch for the model."""
 
-    max_num_batched_tokens: int = Field(default=DEFAULT_MAX_NUM_BATCHED_TOKENS, ge=1)
+    max_num_batched_tokens: int = Field(default=DEFAULT_MAX_NUM_BATCHED_TOKENS, ge=1) #单次调度最多能处理多少个token
     """Maximum number of tokens to be processed in a single iteration.
 
     The default value here is mainly for convenience when testing.
@@ -61,21 +61,21 @@ class SchedulerConfig:
     In real usage, this should be set in `EngineArgs.create_engine_config`.
     """
 
-    max_num_partial_prefills: int = Field(default=1, ge=1)
+    max_num_partial_prefills: int = Field(default=1, ge=1) #ge的意思是大于等于1
     """For chunked prefill, the maximum number of sequences that can be
     partially prefilled concurrently."""
 
-    max_long_partial_prefills: int = Field(default=1, ge=1)
+    max_long_partial_prefills: int = Field(default=1, ge=1)  #其中允许多少条 超长 prompt（> long_prefill_token_threshold）处于部分 prefill 状态
     """For chunked prefill, the maximum number of prompts longer than
     long_prefill_token_threshold that will be prefilled concurrently. Setting
     this less than max_num_partial_prefills will allow shorter prompts to jump
     the queue in front of longer prompts in some cases, improving latency."""
 
-    long_prefill_token_threshold: int = 0
+    long_prefill_token_threshold: int = 0 #prompt 超过多少 token 算“长”（0=所有都算长）
     """For chunked prefill, a request is considered long if the prompt is
     longer than this number of tokens."""
 
-    enable_chunked_prefill: bool = True
+    enable_chunked_prefill: bool = True #是否允许把超长 prompt 切块 来 prefill（允许 prefill 和 decode 混批）
     """If True, prefill requests can be chunked based
     on the remaining `max_num_batched_tokens`.
 
@@ -100,7 +100,7 @@ class SchedulerConfig:
     NOTE: This is not currently configurable. It will be overridden by
     max_num_batched_tokens in case max multimodal embedding size is larger."""
 
-    policy: SchedulerPolicy = "fcfs"
+    policy: SchedulerPolicy = "fcfs"  #调度策略："fcfs"：先来先服务"priority"：优先级 + 到达时间打破平局
     """The scheduling policy to use:\n
     - "fcfs" means first come first served, i.e. requests are handled in order
     of arrival.\n
@@ -122,7 +122,7 @@ class SchedulerConfig:
     the default scheduler. Can be a class directly or the path to a class of
     form "mod.custom_class"."""
 
-    disable_hybrid_kv_cache_manager: bool | None = None
+    disable_hybrid_kv_cache_manager: bool | None = None #是否禁用“混合 KV cache 管理”（对有 sliding-window + full attention 混合的模型有用）
     """If set to True, KV cache manager will allocate the same size of KV cache
     for all attention layers even if there are multiple type of attention layers
     like full attention and sliding window attention.
@@ -130,14 +130,14 @@ class SchedulerConfig:
     and starting configuration.
     """
 
-    async_scheduling: bool = False
+    async_scheduling: bool = False  #否异步调度（减少 GPU 空闲间隙），目前很多功能不支持（如推测解码、tensor 并行），默认关
     """If set to True, perform async scheduling. This helps to avoid gaps in
     GPU utilization, leading to better latency and throughput.
     Async scheduling is currently not supported with some features such as
     speculative decoding and pipeline parallelism.
     """
 
-    stream_interval: int = Field(default=1, ge=1)
+    stream_interval: int = Field(default=1, ge=1) #每生成多少token才向客户端发送一次 如果设成 10  vLLM 会先在内存里攒够 10 个 token，再一次性把这 10 个发给客户端  客户端看到的是“一次跳出好几个词”，而不是一个一个冒出来
     """The interval (or buffer size) for streaming in terms of token length.
     A smaller value (1) makes streaming smoother by sending each token immediately,
     while a larger value (e.g., 10) reduces host overhead and may increase throughput
@@ -148,6 +148,7 @@ class SchedulerConfig:
         """
         Factory method to create `SchedulerConfig` with default values for `InitVar`s.
         """
+        #当你创建 SchedulerConfig 时，如果没传 max_model_len 或 is_encoder_decoder 这两个 InitVar（只在初始化时用、不会存到实例里的字段），就自动帮你补上默认值，然后再真正创建对象。
         if "max_model_len" not in kwargs:
             kwargs["max_model_len"] = 8192
         if "is_encoder_decoder" not in kwargs:
@@ -204,7 +205,7 @@ class SchedulerConfig:
         hash_str = safe_hash(str(factors).encode(), usedforsecurity=False).hexdigest()
         return hash_str
 
-    @field_validator("scheduler_cls", "async_scheduling", mode="wrap")
+    @field_validator("scheduler_cls", "async_scheduling", mode="wrap") #允许某个字段在“延迟初始化”时可以合法地赋值为 None，而不触发正常的验证逻辑。
     @classmethod
     def _skip_none_validation(cls, value: Any, handler: Callable) -> Any:
         """Skip validation if the value is `None` when initialisation is delayed."""

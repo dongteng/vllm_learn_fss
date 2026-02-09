@@ -98,7 +98,7 @@ class SimScheduler:
                 self.request_queue.pop(0)
                 self.activate_sequences[seq.seq_id] = seq
                 self.used_kv_blocks += needed_blocks
-                print(f"[Scheduler]已激活Seq {seq.seq_id} 到activate (使用{needed_blocks}块")
+                print(f"[Scheduler]已激活Seq {seq.seq_id} 到activate (使用{needed_blocks}块）")
             else:
                 break #无法调度更多
 
@@ -290,8 +290,8 @@ if __name__ == "__main__":
 
     prompts_to_run = [
         "Hello my name is",
-        "The capital of France is",
-        "vLLM simulates distributed inference by",
+        # "The capital of France is",
+        # "vLLM simulates distributed inference by",
         ]
     outputs = sim_engine.generate(prompts=prompts_to_run,max_tokens=5)
 

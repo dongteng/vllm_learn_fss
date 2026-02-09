@@ -900,7 +900,7 @@ class EngineCoreProc(EngineCore):
 
     def _process_input_queue(self):
         """Exits when an engine step needs to be performed."""
-
+        #以同步的方式从Engine输入队列Input_queue中获取新的请求，并在随后用_handle_client_request进一步放入该请求并做进一步的调度
         waited = False
         while (
             not self.engines_running

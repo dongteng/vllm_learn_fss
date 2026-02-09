@@ -78,7 +78,7 @@ class FrontendArgs:
     port: int = 8000
     """Port number."""
     uds: str | None = None
-    """Unix domain socket path. If set, host and port arguments are ignored."""
+    """Unix domain socket path. If set, host and port arguments are ignored.不监听tcp端口 而监听本地unix socket文件"""
     uvicorn_log_level: Literal[
         "debug", "info", "warning", "error", "critical", "trace"
     ] = "info"
@@ -100,7 +100,7 @@ class FrontendArgs:
     """LoRA modules configurations in either 'name=path' format or JSON format
     or JSON list format. Example (old format): `'name=path'` Example (new
     format): `{\"name\": \"name\", \"path\": \"lora_path\",
-    \"base_model_name\": \"id\"}`"""
+    \"base_model_name\": \"id\"}`""" #指定lora模型的，不用合并权重了啊
     chat_template: str | None = None
     """The file path to the chat template, or the template in single-line form
     for the specified model."""
@@ -138,58 +138,58 @@ class FrontendArgs:
     """When `--max-logprobs` is specified, represents single tokens as
     strings of the form 'token_id:{token_id}' so that tokens that are not
     JSON-encodable can be identified."""
-    disable_frontend_multiprocessing: bool = False
-    """If specified, will run the OpenAI frontend server in the same process as
-    the model serving engine."""
+    disable_frontend_multiprocessing: bool = False #强制把 OpenAI 前端服务器（FastAPI 部分）和模型推理引擎（LLMEngine）跑在同一个进程里，而不是默认的多进程分离。
+    """If specified, will run the OpenAI frontend server in the same process as #
+    the model serving engine.""" #调试更容易（单进程，栈追踪清晰，不用跨进程追 bug）些环境（如某些容器、调试工具、或特殊硬件）多进程有兼容问题
     enable_request_id_headers: bool = False
     """If specified, API server will add X-Request-Id header to responses."""
-    enable_auto_tool_choice: bool = False
+    enable_auto_tool_choice: bool = False #自动工具选择（Auto Tool Choice）功能，让模型在 tool_choice="auto" 时自主决定是否调用工具，
     """Enable auto tool choice for supported models. Use `--tool-call-parser`
-    to specify which parser to use."""
+    to specify which parser to use.""" #vLLM 支持 tool_choice 的值：auto（模型自己决定）、none（强制不调用）、required（强制必须调用）、或指定某个工具名。必须搭配--tool-call-parser 使用，否则启动会报错。
     exclude_tools_when_tool_choice_none: bool = False
     """If specified, exclude tool definitions in prompts when
     tool_choice='none'."""
-    tool_call_parser: str | None = None
+    tool_call_parser: str | None = None #指定哪个解析器来把模型生成的原始工具调用输出（通常是 JSON 或 XML 格式的文本）转换成 OpenAI 兼容的 tool_calls 结构（list of dicts）。
     """Select the tool call parser depending on the model that you're using.
     This is used to parse the model-generated tool call into OpenAI API format.
     Required for `--enable-auto-tool-choice`. You can choose any option from
     the built-in parsers or register a plugin via `--tool-parser-plugin`."""
-    tool_parser_plugin: str = ""
+    tool_parser_plugin: str = "" #定义工具解析器插件的路径或名称，让你能注册自己的 parser。
     """Special the tool parser plugin write to parse the model-generated tool
     into OpenAI API format, the name register in this plugin can be used in
     `--tool-call-parser`."""
-    tool_server: str | None = None
+    tool_server: str | None = None #外部工具服务器的地址列表（逗号分隔的 host:port），vLLM 会把工具调用转发到这些服务器执行
     """Comma-separated list of host:port pairs (IPv4, IPv6, or hostname).
     Examples: 127.0.0.1:8000, [::1]:8000, localhost:1234. Or `demo` for demo
     purpose."""
     log_config_file: str | None = envs.VLLM_LOGGING_CONFIG_PATH
     """Path to logging config JSON file for both vllm and uvicorn"""
-    max_log_len: int | None = None
+    max_log_len: int | None = None  #限制日志长度 避免日志文件爆炸
     """Max number of prompt characters or prompt ID numbers being printed in
     log. The default of None means unlimited."""
-    disable_fastapi_docs: bool = False
+    disable_fastapi_docs: bool = False #禁用 FastAPI 自带的 OpenAPI 文档
     """Disable FastAPI's OpenAPI schema, Swagger UI, and ReDoc endpoint."""
-    enable_prompt_tokens_details: bool = False
+    enable_prompt_tokens_details: bool = False #在响应的usage字段中，额外返回prompt_tokens_details  适用场景：精细计费、分析 prompt 结构。
     """If set to True, enable prompt_tokens_details in usage."""
-    enable_server_load_tracking: bool = False
+    enable_server_load_tracking: bool = False #app.state 里启用 server_load_metrics 跟踪（负载指标，如队列长度、等待时间等）。适用场景：内部监控、Prometheus 采集、动态扩缩容。
     """If set to True, enable tracking server_load_metrics in the app state."""
-    enable_force_include_usage: bool = False
+    enable_force_include_usage: bool = False #强制每个响应都带上 usage 字段（token 消耗统计），即使客户端没请求。适用场景：统一计费系统、强制记录所有请求消耗。
     """If set to True, including usage on every request."""
-    enable_tokenizer_info_endpoint: bool = False
+    enable_tokenizer_info_endpoint: bool = False #开启 /tokenizer_info 接口，返回 tokenizer 配置（包括 chat template、特殊 token 等）。
     """Enable the `/tokenizer_info` endpoint. May expose chat
     templates and other tokenizer configuration."""
-    enable_log_outputs: bool = False
+    enable_log_outputs: bool = False #是否在日志里打印模型生成的输出（generation）。必须同时开启 --enable-log-requests 才生效。
     """If True, log model outputs (generations).
     Requires --enable-log-requests."""
     h11_max_incomplete_event_size: int = H11_MAX_INCOMPLETE_EVENT_SIZE_DEFAULT
     """Maximum size (bytes) of an incomplete HTTP event (header or body) for
     h11 parser. Helps mitigate header abuse. Default: 4194304 (4 MB)."""
-    h11_max_header_count: int = H11_MAX_HEADER_COUNT_DEFAULT
+    h11_max_header_count: int = H11_MAX_HEADER_COUNT_DEFAULT #单个请求允许的最大 HTTP header 数量
     """Maximum number of HTTP headers allowed in a request for h11 parser.
     Helps mitigate header abuse. Default: 256."""
     log_error_stack: bool = envs.VLLM_SERVER_DEV_MODE
     """If set to True, log the stack trace of error responses"""
-    tokens_only: bool = False
+    tokens_only: bool = False #只启用 Tokens In/Out 端点（极简模式），关闭其他所有 OpenAI 兼容接口。
     """
     If set to True, only enable the Tokens In<>Out endpoint. 
     This is intended for use in a Disaggregated Everything setup.
@@ -289,9 +289,9 @@ def validate_parsed_serve_args(args: argparse.Namespace):
     validate_chat_template(args.chat_template)
 
     # Enable auto tool needs a tool call parser to be valid
-    if args.enable_auto_tool_choice and not args.tool_call_parser:
+    if args.enable_auto_tool_choice and not args.tool_call_parser: #如果你开了自动工具调用（--enable-auto-tool-choice），就必须同时指定工具调用解析器（--tool-call-parser）。
         raise TypeError("Error: --enable-auto-tool-choice requires --tool-call-parser")
-    if args.enable_log_outputs and not args.enable_log_requests:
+    if args.enable_log_outputs and not args.enable_log_requests:#如果你想记录模型的输出内容（--enable-log-outputs），就必须先开启请求日志（--enable-log-requests）。
         raise TypeError("Error: --enable-log-outputs requires --enable-log-requests")
 
 
