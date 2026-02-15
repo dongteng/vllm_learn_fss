@@ -75,6 +75,7 @@ def maybe_model_redirect(model: str) -> str:
 
     :param model: hf model name
     :return: maybe redirect to a local folder
+    给模型名加一层本地重定向，让你可以用本地路径代替远程模型
     """
 
     model_redirect_path = envs.VLLM_MODEL_REDIRECT_PATH
@@ -96,8 +97,8 @@ def maybe_model_redirect(model: str) -> str:
 
 
 def parse_safetensors_file_metadata(path: str | PathLike) -> dict[str, Any]:
-    with open(path, "rb") as f:
-        length_of_metadata = struct.unpack("<Q", f.read(8))[0]
+    with open(path, "rb") as f: #二进制模式打开文件
+        length_of_metadata = struct.unpack("<Q", f.read(8))[0]#先读文件前 8 个字节  ,<Q 表示 小端（little-endian）的 unsigned long long（8字节整数）
         metadata = json.loads(f.read(length_of_metadata).decode("utf-8"))
         return metadata
 

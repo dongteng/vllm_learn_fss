@@ -204,12 +204,14 @@ def _add_prefix(file: TextIO, worker_name: str, pid: int) -> None:
 
 def decorate_logs(process_name: str | None = None) -> None:
     """Decorate stdout/stderr with process name and PID prefix."""
+    #vLLM 项目中用于美化/区分多进程日志输出的一个实用工具函数，
+
     # Respect VLLM_CONFIGURE_LOGGING environment variable
-    if not envs.VLLM_CONFIGURE_LOGGING:
+    if not envs.VLLM_CONFIGURE_LOGGING:#如果用户设置环境变量 VLLM_CONFIGURE_LOGGING=0 或 False，就完全跳过这个装饰逻辑。方便有些人不想被加前缀，或者用自己的日志系统。
         return
 
     if process_name is None:
-        process_name = get_mp_context().current_process().name
+        process_name = get_mp_context().current_process().name #动获取当前进程名（多进程模式下很常用）
 
     pid = os.getpid()
     _add_prefix(sys.stdout, process_name, pid)

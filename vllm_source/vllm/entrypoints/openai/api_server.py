@@ -180,7 +180,7 @@ async def build_async_engine_client(
 @asynccontextmanager
 async def build_async_engine_client_from_engine_args(
     engine_args: AsyncEngineArgs,
-    *,
+    *,#仅限关键字参数分隔符，前边的可以用位置传参 也可以关键字传参
     usage_context: UsageContext = UsageContext.OPENAI_API_SERVER,
     disable_frontend_multiprocessing: bool = False,
     client_config: dict[str, Any] | None = None,
@@ -201,7 +201,7 @@ async def build_async_engine_client_from_engine_args(
 
     from vllm.v1.engine.async_llm import AsyncLLM
 
-    async_llm: AsyncLLM | None = None
+    async_llm: AsyncLLM | None = None #声明变量并初始化为 None
 
     # Don't mutate the input client_config
     client_config = dict(client_config) if client_config else {}
@@ -224,7 +224,7 @@ async def build_async_engine_client_from_engine_args(
         assert async_llm is not None
         await async_llm.reset_mm_cache()
 
-        yield async_llm
+        yield async_llm #关键一步：把资源交给使用者 ，yield 本身的值（yield 右边的表达式）会被赋值给 as 后面的变量。
     finally:
         if async_llm:
             async_llm.shutdown()
@@ -1315,7 +1315,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     """Run a single-worker API server."""
 
     # Add process-specific prefix to stdout and stderr.
-    decorate_logs("APIServer")
+    decorate_logs("APIServer") #这是一个 vLLM 内部工具函数
 
     listen_address, sock = setup_server(args)
     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)

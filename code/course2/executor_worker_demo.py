@@ -45,7 +45,7 @@ def master(num_workers: int = 2):
     procs = [mp.Process(target=worker, args=(rank, work_q, result_queues[rank]))
              for rank in range(num_workers)] #创建进程 但还没启动
     for p in procs:
-        p.start() #这一行后 才真的spawn出紫禁城，worker开始执行，Master不等它们，继续往下跑
+        p.start() #这一行后 才真的spawn出子进程，worker开始执行，Master不等它们，继续往下跑
 
     # 等待 READY  #在worker里 初始化完成后，向自己的result_queue发送一条"READY"
     while sum(rq.get() == "READY" for rq in result_queues) < num_workers:

@@ -70,7 +70,7 @@ else:
 
 logger = init_logger(__name__)
 
-RunnerOption = Literal["auto", RunnerType]
+RunnerOption = Literal["auto", RunnerType] #限定
 ConvertType = Literal["none", "embed", "classify", "reward", "mm_encoder_only"]
 ConvertOption = Literal["auto", ConvertType]
 TokenizerMode = Literal["auto", "hf", "slow", "mistral", "deepseek_v32"]
@@ -78,6 +78,8 @@ ModelDType = Literal["auto", "half", "float16", "bfloat16", "float", "float32"]
 LogprobsMode = Literal[
     "raw_logits", "raw_logprobs", "processed_logits", "processed_logprobs"
 ]
+#HfOverrides是2种类型之一 一个字典 或者一个函数 Callable
+#Callable是typing模块提供的函数类型标注，是专门给类型检查期刊的
 HfOverrides = dict[str, Any] | Callable[[PretrainedConfig], PretrainedConfig]
 ModelImpl = Literal["auto", "vllm", "transformers", "terratorch"]
 LayerBlockType = Literal["attention", "linear_attention", "mamba"]
@@ -192,7 +194,17 @@ class ModelConfig:
     """Maximum number of log probabilities to return when `logprobs` is
     specified in `SamplingParams`. The default value comes the default for the
     OpenAI Chat Completions API. -1 means no cap, i.e. all (output_length *
-    vocab_size) logprobs are allowed to be returned and it may cause OOM."""
+    vocab_size) logprobs are allowed to be returned and it may cause OOM.
+    当在 SamplingParams 中指定了 logprobs 时，最多返回多少个 token 的对数概率。
+
+    默认值来自 OpenAI Chat Completions API 的默认设置。
+    
+    -1 表示不设上限，也就是允许返回所有
+    （output_length * vocab_size）个 logprob，
+    这可能会导致显存或内存 OOM。
+        
+    
+    """
     logprobs_mode: LogprobsMode = "raw_logprobs"
     """Indicates the content returned in the logprobs and prompt_logprobs.
     Supported mode:
@@ -200,27 +212,62 @@ class ModelConfig:
     Raw means the values before applying any logit processors, like bad words.
     Processed means the values after applying all processors, including
     temperature and top_k/top_p.
+    logprobs_mode：指定在 logprobs 和 prompt_logprobs 中返回的内容。
+
+    支持的模式：
+    1) raw_logprobs
+    2) processed_logprobs
+    3) raw_logits
+    4) processed_logits
+    
+    raw 表示在应用任何 logit 处理器（例如不允许词 bad words 过滤）之前的值。
+    
+    processed 表示在应用所有处理器之后的值，
+    包括 temperature 以及 top_k / top_p 等采样策略。
     """
     disable_sliding_window: bool = False
     """Whether to disable sliding window. If True, we will disable the sliding
     window functionality of the model, capping to sliding window size. If the
-    model does not support sliding window, this argument is ignored."""
+    model does not support sliding window, this argument is ignored.
+    是否禁用滑动窗口。
+    如果为 True，将禁用模型的滑动窗口功能，并将上下文长度限制在滑动窗口大小以内。
+    如果模型本身不支持滑动窗口，则忽略该参数。
+    """
     disable_cascade_attn: bool = False
     """Disable cascade attention for V1. While cascade attention does not
     change the mathematical correctness, disabling it could be useful for
     preventing potential numerical issues. Note that even if this is set to
     False, cascade attention will be only used when the heuristic tells that
-    it's beneficial."""
+    it's beneficial.
+    否禁用 V1 版本中的级联注意力（cascade attention）。
+
+    禁用级联注意力不会影响数学上的正确性，但在某些情况下，
+    关闭它有助于避免潜在的数值稳定性问题。
+    
+    注意：即使将该参数设置为 False，级联注意力也只有在
+    启发式策略判断它“有利”时才会启用。
+    """
     skip_tokenizer_init: bool = False
     """Skip initialization of tokenizer and detokenizer. Expects valid
     `prompt_token_ids` and `None` for prompt from the input. The generated
-    output will contain token ids."""
+    output will contain token ids.
+    skip_tokenizer_init：是否跳过 tokenizer 和 detokenizer 的初始化。
+
+    如果为 True，则跳过分词器和反分词器的初始化，
+    此时输入必须提供合法的 `prompt_token_ids`，并且 prompt 需要为 None。
+    生成的输出将直接包含 token id，而不是文本。
+    我理解是：直接把 token id 给模型，模型输出也是 token id，中间不会再做文本 ↔ token 的转换
+    """
     enable_prompt_embeds: bool = False
     """If `True`, enables passing text embeddings as inputs via the
     `prompt_embeds` key.
 
     WARNING: The vLLM engine may crash if incorrect shape of embeddings is passed.
-    Only enable this flag for trusted users!"""
+    Only enable this flag for trusted users!
+    是否允许通过 `prompt_embeds` 直接传入文本的向量表示（embedding）作为输入。
+    ⚠️ 警告：如果传入的 embedding 形状不正确，vLLM 引擎可能会崩溃。  
+    只有在信任的用户或场景下才应启用此选项。
+    """
     served_model_name: str | list[str] | None = None
     """The model name(s) used in the API. If multiple names are provided, the
     server will respond to any of the provided names. The model name in the
@@ -234,25 +281,54 @@ class ModelConfig:
     - "auto" will try to load the config in hf format if available after trying
     to load in mistral format.\n
     - "hf" will load the config in hf format.\n
-    - "mistral" will load the config in mistral format."""
+    - "mistral" will load the config in mistral format.
+    - "auto"：优先尝试加载 Mistral 格式，如果不可用则尝试 Hugging Face（hf）格式。
+    - "hf"：强制加载 Hugging Face 格式的配置。
+    - "mistral"：强制加载 Mistral 格式的配置。Mistral 格式 是 Mistral 公司/团队自家的模型存储格式，和 hf 不完全一样
+    """
     hf_token: bool | str | None = None
     """The token to use as HTTP bearer authorization for remote files . If
     `True`, will use the token generated when running `huggingface-cli login`
-    (stored in `~/.huggingface`)."""
+    (stored in `~/.huggingface`).
+    hf_token：用于访问远程文件的 HTTP Bearer 授权令牌。
+    - 如果传入字符串 → 使用该字符串作为访问令牌  
+    - 如果为 True → 使用在本地运行 `huggingface-cli login` 时生成的令牌（存储在 `~/.huggingface`）  
+    - 如果为 None → 不使用令牌
+    """
     hf_overrides: HfOverrides = field(default_factory=dict)
     """If a dictionary, contains arguments to be forwarded to the Hugging Face
     config. If a callable, it is called to update the HuggingFace config."""
     logits_processor_pattern: str | None = None
     """Optional regex pattern specifying valid logits processor qualified names
     that can be passed with the `logits_processors` extra completion argument.
-    Defaults to `None`, which allows no processors."""
+    Defaults to `None`, which allows no processors.
+    在模型生成里，logits 是模型对每个 token 的原始打分。
+    logits processors 就是在生成之前对 logits 做处理的规则，例如： 
+    屏蔽不想生成的词（bad words filter）
+    限制 top-k / top-p 采样
+    惩罚重复 token（repetition penalty）
+    换句话说：
+    logits processor = 对模型打分做后处理的插件
+    """
     generation_config: str = "auto"
     """The folder path to the generation config. Defaults to `"auto"`, the
     generation config will be loaded from model path. If set to `"vllm"`, no
     generation config is loaded, vLLM defaults will be used. If set to a folder
     path, the generation config will be loaded from the specified folder path.
     If `max_new_tokens` is specified in generation config, then it sets a
-    server-wide limit on the number of output tokens for all requests."""
+    server-wide limit on the number of output tokens for all requests.
+    - 默认值 "auto"：从模型所在路径加载生成配置。  
+    - 设置为 "vllm"：不加载任何生成配置，使用 vLLM 的默认值。  
+    - 设置为具体文件夹路径：从指定路径加载生成配置。  
+    注意：如果生成配置中指定了 `max_new_tokens`，则会对所有请求生效，作为服务端输出 token 数量的上限。  
+    这是干嘛的？
+    在 vLLM 或任何大语言模型推理中，“生成配置”控制的是模型生成行为，例如：
+    最大生成长度（max_new_tokens）
+    采样策略（top-k / top-p / temperature） ；是否使用 beam search；是否返回 logprobs；是否启用重复惩罚等
+    可以理解为 模型生成的“规则手册”
+    这个参数告诉 vLLM：
+    从哪儿读这些规则"auto" → 默认从模型目录加载； "vllm" → 不加载，直接用 vLLM 内置默认值；文件夹路径 → 从指定路径加载
+    """
     override_generation_config: dict[str, Any] = field(default_factory=dict)
     """Overrides or sets generation config. e.g. `{"temperature": 0.5}`. If
     used with `--generation-config auto`, the override parameters will be
@@ -260,7 +336,9 @@ class ModelConfig:
     `--generation-config vllm`, only the override parameters are used."""
     enable_sleep_mode: bool = False
     """Enable sleep mode for the engine (only cuda and
-    hip platforms are supported)."""
+    hip platforms are supported).
+    enable_sleep_mode 控制引擎在空闲时是否进入“低活跃状态”，节省 GPU 资源，只在 CUDA / HIP 平台支持。
+    """
     model_impl: str | ModelImpl = "auto"
     """Which implementation of the model to use:\n
     - "auto" will try to use the vLLM implementation, if it exists, and fall
@@ -269,6 +347,7 @@ class ModelConfig:
     - "vllm" will use the vLLM model implementation.\n
     - "transformers" will use the Transformers model implementation.\n
     - "terratorch" will use the TerraTorch model implementation.
+    用哪个版本的推理来跑模型
     """
     override_attention_dtype: str | None = None
     """Override dtype for attention"""
@@ -276,7 +355,15 @@ class ModelConfig:
     """One or more logits processors' fully-qualified class names or class
     definitions"""
     io_processor_plugin: str | None = None
-    """IOProcessor plugin name to load at model startup"""
+    """IOProcessor plugin name to load at model startup
+    
+    在 vLLM 中，模型的输入输出（I/O）不仅仅是文本或token id，有时候需要做一些额外处理，例如：
+    文本预处理 / 分词
+    token → embedding 转换
+    输出结果 post-processing（去掉空格、加特殊符号、格式化 JSON）
+    支持多模态输入（比如图片 + 文本）
+    这些处理逻辑通常封装成 插件（plugin）。
+    """
 
     # Pooler config
     pooler_config: PoolerConfig | None = None
@@ -311,6 +398,7 @@ class ModelConfig:
         graph from input ids/embeddings to the final hidden states,
         excluding anything before input ids/embeddings and after
         the final hidden states.
+        哪些配置会影响模型从输入 token/embedding 到最后 hidden state 的计算流程？把它们组合起来生成一个唯一标识。
         """
         ignored_factors = {
             "runner",
@@ -600,14 +688,18 @@ class ModelConfig:
         self._verify_cuda_graph()
         self._verify_bnb_config()
 
+    #这行装饰器告诉系统：对 tokenizer 和 max_model_len 字段，用 _skip_none_validation 包裹原来的验证器，允许 None 跳过校验。
+    #对象初始化 / 字段赋值 = 触发验证事件
     @field_validator("tokenizer", "max_model_len", mode="wrap")
     @classmethod
-    def _skip_none_validation(cls, value: Any, handler: Callable) -> Any:
+    def _skip_none_validation(cls, value: Any, handler: Callable) -> Any:  #作用：在初始化配置时，如果某些字段是 None，就跳过校验
         """Skip validation if the value is `None` when initialisation is delayed."""
         if value is None:
             return value
-        return handler(value)
+        return handler(value) #否则调用原本的验证器 handler(value)
 
+    #指定这个验证器只作用于名叫 tokenizer_mode 的字段
+    #用户传入的值最终存储在模型里的值"Auto""auto",那么无论用户怎么写，最终值都会被转成小写
     @field_validator("tokenizer_mode", mode="after")
     def _lowercase_tokenizer_mode(cls, tokenizer_mode: str) -> str:
         return tokenizer_mode.lower()
@@ -1744,7 +1836,7 @@ class ModelConfig:
                 return False
             logger.debug("Generative models support chunked prefill.")
             return True
-
+    #prefix caching在生成任务里很重要，它能让模型生成新 token 时重用之前的 attention 计算结果，加快推理速度。
     @property
     def is_prefix_caching_supported(self) -> bool:
         attn_type = self.attn_type

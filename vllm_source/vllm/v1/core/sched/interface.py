@@ -55,6 +55,22 @@ class SchedulerInterface(ABC):
         Returns:
             A SchedulerOutput object containing information about the scheduled
             requests.
+        在本调度步骤中安排需要处理的请求。
+        调度决策是在每次迭代层面做出的。每个调度步骤对应模型的一次完整前向传播。
+        因此，该方法会被 engine 中的一个忙等待循环（busy loop）反复调用。
+
+        本质上，调度器会生成一个字典 {req_id: num_tokens}，用于说明在这个调度步骤中，
+        每个请求需要处理多少个 token。例如：
+        - 对于新到达的请求，num_tokens 可能大到等于其完整的 prompt token 数量；
+        - 对于正在自回归逐个生成新 token 的请求，num_tokens 通常为 1；
+        - 在使用分块预填充（chunked prefills）、前缀缓存（prefix caching）、推测解码（speculative decoding）等场景下，
+          则可能取介于两者之间的某个值。
+
+        此外，调度器还会返回关于各个请求或整个批次的一些有用信息。
+        模型运行时（model runner）会利用这些信息来准备模型的输入。
+
+        返回：
+            一个 SchedulerOutput 对象，包含已调度请求的相关信息。
         """
         raise NotImplementedError
 
@@ -62,6 +78,9 @@ class SchedulerInterface(ABC):
     def get_grammar_bitmask(
         self, scheduler_output: "SchedulerOutput"
     ) -> "GrammarOutput | None":
+        """根据当前调度输出返回 grammar 约束的 bitmask。
+
+            返回 None 表示不施加任何语法约束。"""
         raise NotImplementedError
 
     @abstractmethod
@@ -81,6 +100,35 @@ class SchedulerInterface(ABC):
         Returns:
             A dict of client index to EngineCoreOutputs object containing the
             outputs for each request originating from that client.
+
+        根据模型运行时的输出，更新调度器的内部状态。
+
+        该方法在模型运行时（model runner）完成当前批次的推理/生成后被调用。
+        模型运行时会返回本次生成的 token id、用于下一轮的 draft token（若使用推测解码）、
+        logits（部分实现可能包含）、以及其他相关信息。
+
+        调度器需要利用这些信息完成以下工作：
+        - 更新每个请求的已生成序列、KV cache 位置、生成状态等
+        - 判断哪些请求已经完成（遇到 EOS、达到最大长度、满足停止条件等）
+        - 处理推测解码的接受/拒绝逻辑（若启用）
+        - 清理已结束请求占用的资源
+        - 收集并组织每个请求的输出结果
+
+        参数:
+            scheduler_output:   本次调度步骤中调度器刚刚做出的调度决定
+                                （即哪些请求、每个请求分配了多少 token 位置等）
+            model_runner_output:模型运行时对本次批次实际执行后的输出结果，
+                                包含生成的 token ids、各序列的 logits（可选）、
+                                推测 token 的接受掩码等信息
+
+        返回:
+            dict[int, EngineCoreOutputs]:
+                键为客户端索引（client index，通常对应不同的请求来源或会话分组），
+                值为 EngineCoreOutputs 对象，包含该客户端下所有相关请求在本轮的输出结果。
+                （通常包括：新生成的 token、是否结束、生成的文本或 token 列表等）
+
+        典型调用时机：
+            engine 主循环中：调度 → 模型前向 → update_from_output → 返回给上层/客户端
         """
         raise NotImplementedError
 

@@ -61,13 +61,22 @@ logger = init_logger(__name__)
 
 
 class OptimizationLevel(IntEnum):
-    """Optimization level enum."""
+    """Optimization level enum.
+
+
+    """
 
     O0 = 0
-    """O0 : No optimization. no compilation, no cudagraphs, no other
+    """
+    启动最快、调试最方便、性能最差，适合开发 debug 验证正确性
+    O0 : No optimization. no compilation, no cudagraphs, no other
     optimization, just starting up immediately"""
     O1 = 1
-    """O1: Quick optimizations. Dynamo+Inductor compilation and Piecewise
+    """O1: Quick optimizations.
+     Dynamo 动态图->计算图
+     Inductor compilation  编译成高效 CUDA kernel
+     and 
+     Piecewise
     cudagraphs"""
     O2 = 2
     """O2: Full optimizations. -O1 as well as Full and Piecewise cudagraphs."""
@@ -87,7 +96,12 @@ IS_DENSE = False
 
 def enable_norm_fusion(cfg: "VllmConfig") -> bool:
     """Enable if either RMS norm or quant FP8 custom op is active;
-    otherwise Inductor handles fusion."""
+    otherwise Inductor handles fusion.
+    如果用的是“自己写的高性能算子”，就打开“手动融合”；
+    如果用的是 PyTorch 自带算子，就让 PyTorch 自己去做融合。
+
+
+    """
 
     return cfg.compilation_config.is_custom_op_enabled(
         "rms_norm"
