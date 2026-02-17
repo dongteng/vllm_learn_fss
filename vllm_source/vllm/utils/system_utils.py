@@ -248,6 +248,7 @@ def kill_process_tree(pid: int):
 
 # Adapted from: https://github.com/sgl-project/sglang/blob/v0.4.1/python/sglang/srt/utils.py#L630
 def set_ulimit(target_soft_limit: int = 65535):
+    #提高系统允许你这个程序同时打开的“文件 / socket 数量上限”，防止程序因为“文件打开太多”而崩溃。
     if sys.platform.startswith("win"):
         logger.info("Windows detected, skipping ulimit adjustment.")
         return

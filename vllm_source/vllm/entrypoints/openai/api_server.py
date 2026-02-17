@@ -872,20 +872,22 @@ def build_app(args: Namespace) -> FastAPI:
         )
     else:
         app = FastAPI(lifespan=lifespan)
-    app.state.args = args
-    from vllm.entrypoints.serve import register_vllm_serve_api_routers
+    app.state.args = args #把启动参数存入app全局状态，后续所有请求都可以访问
 
+    #注册vLLM主要API路由，把核心API路由注册到FastAPI
+    from vllm.entrypoints.serve import register_vllm_serve_api_routers
     register_vllm_serve_api_routers(app)
 
+    #注册SageMaker兼容API
     from vllm.entrypoints.sagemaker.routes import register_sagemaker_routes
-
     register_sagemaker_routes(router)
     app.include_router(router)
 
     app.root_path = args.root_path
 
-    from vllm.entrypoints.pooling import register_pooling_api_routers
 
+    #注册pooling api 向量池/embedding polling api
+    from vllm.entrypoints.pooling import register_pooling_api_routers
     register_pooling_api_routers(app)
 
     app.add_middleware(
@@ -1230,14 +1232,14 @@ async def init_app_state(
     state.server_load_metrics = 0
 
 
-def create_server_socket(addr: tuple[str, int]) -> socket.socket:
-    family = socket.AF_INET
-    if is_valid_ipv6_address(addr[0]):
+def create_server_socket(addr: tuple[str, int]) -> socket.socket: #输出是一个socket对象
+    family = socket.AF_INET  #默认是IPV4协议
+    if is_valid_ipv6_address(addr[0]): #如果IP是IPV6 那么就切换成IPv6协议
         family = socket.AF_INET6
 
-    sock = socket.socket(family=family, type=socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock = socket.socket(family=family, type=socket.SOCK_STREAM) #创建一个真正的socket对象，type=socket.SOCK_STREAM->TCP链接
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #防止端口占用导致重启失败，简单说如果立即关掉服务器重启，address already in use就是因为端口还没被释放，这行代码告诉系统，我这个端口可以马上复用，不需要等
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1) #允许多个进程、线程绑定同一个端口
     sock.bind(addr)
 
     return sock
@@ -1289,11 +1291,11 @@ def setup_server(args):
         sock = create_server_unix_socket(args.uds)
     else:
         sock_addr = (args.host or "", args.port)
-        sock = create_server_socket(sock_addr)
+        sock = create_server_socket(sock_addr) #这句话的意思是：我要创建一个服务器用的网络插座，并把它交给sock这个变量。
 
     # workaround to avoid footguns where uvicorn drops requests with too
     # many concurrent requests active
-    set_ulimit()
+    set_ulimit()#把系统允许"同时打开的文件数量上限"调大
 
     def signal_handler(*_) -> None:
         # Interrupt server on sigterm while initializing
@@ -1333,23 +1335,25 @@ async def run_server_worker(
         ReasoningParserManager.import_reasoning_parser(args.reasoning_parser_plugin)
 
     # Load logging config for uvicorn if specified
-    log_config = load_log_config(args.log_config_file)
+    log_config = load_log_config(args.log_config_file) #uvicorn日志配置
     if log_config is not None:
         uvicorn_kwargs["log_config"] = log_config
 
     async with build_async_engine_client(
         args,
         client_config=client_config,
-    ) as engine_client:
+    ) as engine_client: #整个服务的核心引擎初始化，可以理解为：启动 LLM 引擎进程 + 建立 RPC + 建立 GPU 通信 + 初始化调度器
         app = build_app(args)
 
-        await init_app_state(engine_client, app.state, args)
+        await init_app_state(engine_client, app.state, args) #初始化app运行状态
 
         logger.info(
             "Starting vLLM API server %d on %s",
             engine_client.vllm_config.parallel_config._api_process_rank,
             listen_address,
         )
+        #真正启动HTTP服务（服务开始对外提供能力），为什么返回shutdown_task，因为serve_http不是阻塞运行，而是启动后台任务
+        #shutdown_task表示等待服务器关闭的future对象
         shutdown_task = await serve_http(
             app,
             sock=sock,
@@ -1368,11 +1372,11 @@ async def run_server_worker(
             h11_max_incomplete_event_size=args.h11_max_incomplete_event_size,
             h11_max_header_count=args.h11_max_header_count,
             **uvicorn_kwargs,
-        )
+        )#serve_http 内部的 server.serve() 是一个会一直运行到服务器关闭才返回的协程，如果你直接 await 它，整个函数就会卡在这里，永远到不了后面的代码。
 
     # NB: Await server shutdown only after the backend context is exited
     try:
-        await shutdown_task
+        await shutdown_task #卡在这里 让服务一直跑
     finally:
         sock.close()
 
@@ -1386,7 +1390,7 @@ if __name__ == "__main__":
         description="vLLM OpenAI-Compatible RESTful API server."
     )
     parser = make_arg_parser(parser)
-    args = parser.parse_args()
+    args = parser.parse_args() #里才是参数真正被解析并更新进 args 的时刻 ,parse_args()（无参数调用）会自动读取 sys.argv[1:]（即命令行里 --model ... 后面的所有部分）。
     validate_parsed_serve_args(args)
 
     uvloop.run(run_server(args))

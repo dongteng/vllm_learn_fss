@@ -23,7 +23,10 @@ from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 
 logger = init_logger(__name__)
 
-
+#那里是Future对象？
+#在asyncio中：写成本身不是Future也不是task,只是一个可await的对象。
+#Task是事件循环中真正会调度执行的对象，它本质上是Future的子类
+#await 一个 coroutine 会隐式把它包装成 Task，然后等待它完成。
 async def serve_http(
     app: FastAPI,
     sock: socket.socket | None,
@@ -35,7 +38,8 @@ async def serve_http(
     options.  Supports http header limits via h11_max_incomplete_event_size and
     h11_max_header_count.
     """
-    logger.info("Available routes are:")
+    #启动前把当前FastAPI注册的路由打印出来（方便debug和确认是否正确加载）
+    logger.info("--------Available routes are:------------")
     for route in app.routes:
         methods = getattr(route, "methods", None)
         path = getattr(route, "path", None)
@@ -57,17 +61,17 @@ async def serve_http(
     if h11_max_header_count is None:
         h11_max_header_count = H11_MAX_HEADER_COUNT_DEFAULT
 
-    config = uvicorn.Config(app, **uvicorn_kwargs)
+    config = uvicorn.Config(app, **uvicorn_kwargs) #用 FastAPI app + 剩下的所有 uvicorn 参数 创建 uvicorn 的配置对象。
     # Set header limits
     config.h11_max_incomplete_event_size = h11_max_incomplete_event_size
     config.h11_max_header_count = h11_max_header_count
     config.load()
-    server = uvicorn.Server(config)
-    _add_shutdown_handlers(app, server)
+    server = uvicorn.Server(config) #创建真正的unicorn server实例（这才是会真正listen的东西）
+    _add_shutdown_handlers(app, server) #给app和server注册一些优雅关闭相关的回调（通常是把一些清理逻辑挂上去）
 
-    loop = asyncio.get_running_loop()
+    loop = asyncio.get_running_loop() #拿到正在运行的事件循环 event loop，不会创建新 loop，只是“借用”当前这个（可能是 uvloop，也可能是标准 asyncio）
 
-    watchdog_task = loop.create_task(watchdog_loop(server, app.state.engine_client))
+    watchdog_task = loop.create_task(watchdog_loop(server, app.state.engine_client))#loop.create_task(...) 把这个协程包装成一个 Task，并立刻调度它到事件循环里去运行。
     server_task = loop.create_task(server.serve(sockets=[sock] if sock else None))
 
     ssl_cert_refresher = (
@@ -96,7 +100,7 @@ async def serve_http(
 
     try:
         await server_task
-        return dummy_shutdown()
+        return dummy_shutdown() #返回一个协程对象
     except asyncio.CancelledError:
         port = uvicorn_kwargs["port"]
         process = find_process_using_port(port)
@@ -110,7 +114,7 @@ async def serve_http(
         logger.info("Shutting down FastAPI HTTP server.")
         return server.shutdown()
     finally:
-        watchdog_task.cancel()
+        watchdog_task.cancel() #执行try里的代码，遇到return 先不返回 先进入finally块，执行finally里的代码完毕后，才把return的值真正返回给调用者。
 
 
 async def watchdog_loop(server: uvicorn.Server, engine: EngineClient):
@@ -119,9 +123,9 @@ async def watchdog_loop(server: uvicorn.Server, engine: EngineClient):
     # for error state in the engine. Needed to trigger shutdown
     # if an exception arises is StreamingResponse() generator.
     """
-    VLLM_WATCHDOG_TIME_S = 5.0
+    VLLM_WATCHDOG_TIME_S = 500.0  #原来是5.0
     while True:
-        await asyncio.sleep(VLLM_WATCHDOG_TIME_S)
+        await asyncio.sleep(VLLM_WATCHDOG_TIME_S) #每隔一段时间醒一次，看看推理引擎（engine）有没有出大事
         terminate_if_errored(server, engine)
 
 
@@ -133,8 +137,8 @@ def terminate_if_errored(server: uvicorn.Server, engine: EngineClient):
     because handler must first return to close the connection
     for this request.
     """
-    engine_errored = engine.errored and not engine.is_running
-    if not envs.VLLM_KEEP_ALIVE_ON_ENGINE_DEATH and engine_errored:
+    engine_errored = engine.errored and not engine.is_running #引擎是否发生了未处理的错误 是否已经停止运行
+    if not envs.VLLM_KEEP_ALIVE_ON_ENGINE_DEATH and engine_errored:#
         server.should_exit = True
 
 
