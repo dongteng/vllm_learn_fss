@@ -525,7 +525,7 @@ def maybe_override_with_speculators(
     else:
         gguf_model_repo = None
     kwargs["local_files_only"] = huggingface_hub.constants.HF_HUB_OFFLINE
-    config_dict, _ = PretrainedConfig.get_config_dict(
+    config_dict, _ = PretrainedConfig.get_config_dict(  #从 HuggingFace 下载/读取模型的 config.json，得到 config_dict
         model if gguf_model_repo is None else gguf_model_repo,
         revision=revision,
         trust_remote_code=trust_remote_code,
@@ -535,9 +535,10 @@ def maybe_override_with_speculators(
     speculators_config = config_dict.get("speculators_config")
 
     if speculators_config is None:
-        # No speculators config found, return original values
+        # No speculators config found, return original values  如果没有->说明是普通模型，直接返回原样
         return model, tokenizer, vllm_speculative_config
 
+    #如果有->进入推测解码的特殊处理逻辑
     # Speculators format detected - process overrides
     from vllm.transformers_utils.configs.speculators.base import SpeculatorsConfig
 
@@ -889,7 +890,10 @@ def get_sentence_transformer_tokenizer_config(
 
 
 def maybe_register_config_serialize_by_value() -> None:
-    """Try to register HF model configuration class to serialize by value
+    """
+    解决在分布式推理系统中致命问题：HF远程自定义配置类在多进程/多节点环境中无法序列化与反序列化
+    这段代码解决huggingface动态加载模型代码在分布式多进程环境下地跨进程可序列化问题
+    Try to register HF model configuration class to serialize by value
 
     If trust_remote_code is set, and the model's config file specifies an
     `AutoConfig` class, then the config class is typically an instance of

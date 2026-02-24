@@ -18,7 +18,7 @@ def get_io_processor(
     # 'vllm.io_processor_plugins' group. Similar to platform
     # plugins, these plugins register a function that returns the class
     # name for the processor to install.
-
+    #为某些特殊模型（多模态、非纯文本生成模型）提供自定义的输入预处理+输出后处理能力
     if plugin_from_init:
         model_plugin = plugin_from_init
     else:

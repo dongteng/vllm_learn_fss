@@ -1386,9 +1386,7 @@ if __name__ == "__main__":
     # This section should be in sync with vllm/entrypoints/cli/main.py for CLI
     # entrypoints.
     cli_env_setup() #设置多进程启动方式为spawn
-    parser = FlexibleArgumentParser(
-        description="vLLM OpenAI-Compatible RESTful API server."
-    )
+    parser = FlexibleArgumentParser(description="vLLM OpenAI-Compatible RESTful API server.")
     parser = make_arg_parser(parser)
     args = parser.parse_args() #里才是参数真正被解析并更新进 args 的时刻 ,parse_args()（无参数调用）会自动读取 sys.argv[1:]（即命令行里 --model ... 后面的所有部分）。
     validate_parsed_serve_args(args)

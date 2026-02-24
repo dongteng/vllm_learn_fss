@@ -84,6 +84,9 @@ def resolve_tokenizer_args(
     tokenizer_mode: str = "auto",
     **kwargs,
 ):
+    """
+    把用户传入的各种乱七八糟的tokenizer配置统一解析成一个可靠的tokenizer对象或配置，供vLLM后续使用
+    """
     revision: str | None = kwargs.get("revision")
     download_dir: str | None = kwargs.get("download_dir")
 
@@ -99,6 +102,7 @@ def resolve_tokenizer_args(
         if not Path(tokenizer_name).exists():
             # Use file lock to prevent multiple processes from
             # downloading the same file at the same time.
+            #比如说多实例部署，开了多个vllm实例不同端口，同一个模型路径，每个实例都认为tokenizer还没下载->同时抢着下。
             with get_lock(tokenizer_name, download_dir):
                 tokenizer_path = snapshot_download(
                     model_id=str(tokenizer_name),
@@ -106,11 +110,11 @@ def resolve_tokenizer_args(
                     revision=revision,
                     local_files_only=huggingface_hub.constants.HF_HUB_OFFLINE,
                     # Ignore weights - we only need the tokenizer.
-                    ignore_file_pattern=[".*.pt", ".*.safetensors", ".*.bin"],
+                    ignore_file_pattern=[".*.pt", ".*.safetensors", ".*.bin"], #忽略权重文件
                 )
                 tokenizer_name = tokenizer_path
 
-    # Separate model folder from file path for GGUF models
+    # Separate model folder from file path for GGUF models #处理gguf格式的tokenzier路径
     if is_gguf(tokenizer_name):
         if check_gguf_file(tokenizer_name):
             kwargs["gguf_file"] = Path(tokenizer_name).name
@@ -127,13 +131,15 @@ def resolve_tokenizer_args(
 
     if "truncation_side" not in kwargs:
         if runner_type == "generate" or runner_type == "draft":
-            kwargs["truncation_side"] = "left"
+            kwargs["truncation_side"] = "left" #截左边的，保留右边的
         elif runner_type == "pooling":
             kwargs["truncation_side"] = "right"
         else:
             assert_never(runner_type)
 
     if tokenizer_mode == "slow":
+        #slow代表强制使用python实现的慢速tokenizer（huggingface的python版tokenizer） 而不是rust实现的fast tokenizer(tokenizers库)
+        #vLLM 允许通过配置 --tokenizer-mode slow 来强制走慢速路径
         if kwargs.get("use_fast", False):
             raise ValueError("Cannot use the fast tokenizer in slow tokenizer mode.")
 
@@ -142,7 +148,8 @@ def resolve_tokenizer_args(
 
     # Try to use official Mistral tokenizer if possible
     if tokenizer_mode == "auto" and importlib.util.find_spec("mistral_common"):
-        allow_patterns = ["tekken.json", "tokenizer.model.v*"]
+        #检查当前环境里是否已经安装了 mistral_common 库
+        allow_patterns = ["tekken.json", "tokenizer.model.v*"] #tekken.json是 Mistral 最新 tokenizer 的配置文件（Tekken 格式）
         files_list = list_filtered_repo_files(
             model_name_or_path=str(tokenizer_name),
             allow_patterns=allow_patterns,
@@ -171,17 +178,18 @@ def tokenizer_args_from_config(config: "ModelConfig", **kwargs):
         **kwargs,
     )
 
-
+#定义一个类型变量_T，它只能表示TokenizerLike或其子类，并默认就是TokenizerLike
 _T = TypeVar("_T", bound=TokenizerLike, default=TokenizerLike)
 
-
+#目的是统一、智能、可缓存地加载tokenizer，给一个模型名，它自动判断该用哪种tokenzier，正确下载、初始化，并且做缓存避免重复加载
+#为什么需要这个？因为模型可能来自hf modelscope 也可能是fast tokenizer \slow，  可能启用trust_remote_code,还可能存在revision、缓存目录等各种参数
 def get_tokenizer(
     tokenizer_name: str | Path,
     *args,
     tokenizer_cls: type[_T] = TokenizerLike,  # type: ignore[assignment]
     trust_remote_code: bool = False,
     revision: str | None = None,
-    download_dir: str | None = None,
+    download_dir: str | None = None,#指定模型下载目录
     **kwargs,
 ) -> _T:
     """Gets a tokenizer for the given model name via HuggingFace or ModelScope."""
@@ -199,6 +207,7 @@ def get_tokenizer(
     else:
         tokenizer_cls_ = tokenizer_cls
 
+    #真正创建tokenizer  这一步本质就是AutoTokenizer.from_pretrained(...)
     tokenizer = tokenizer_cls_.from_pretrained(tokenizer_name, *args, **kwargs)
     if not tokenizer.is_fast:
         logger.warning(

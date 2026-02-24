@@ -67,9 +67,13 @@ class StatLoggerBase(ABC):
 
 
 def load_stat_logger_plugin_factories() -> list[StatLoggerFactory]:
+    """
+    从插件系统中动态加载所有统计日志插件，做类型校验，然后返回这些插件类，供系统后续实例化使用
+    """
     factories: list[StatLoggerFactory] = []
 
     for name, plugin_class in load_plugins_by_group(STAT_LOGGER_PLUGINS_GROUP).items():
+        #type是所有类的元类
         if not isinstance(plugin_class, type) or not issubclass(
             plugin_class, StatLoggerBase
         ):

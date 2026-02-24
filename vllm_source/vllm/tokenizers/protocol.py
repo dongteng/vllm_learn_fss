@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from vllm.entrypoints.chat_utils import ChatCompletionMessageParam
 
 
-class TokenizerLike(Protocol):
+class TokenizerLike(Protocol):#鸭子类型duck typeing
     @classmethod
     def from_pretrained(
         cls,
@@ -90,7 +90,7 @@ class TokenizerLike(Protocol):
         max_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> list[int]:
-        raise NotImplementedError
+        raise NotImplementedError #必须在子类重重写（override）这个方法，否则一调用就会出现NotImplementedError异常
 
     def apply_chat_template(
         self,

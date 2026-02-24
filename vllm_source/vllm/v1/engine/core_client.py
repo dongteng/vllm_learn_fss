@@ -68,6 +68,12 @@ class EngineCoreClient(ABC):
     * InprocClient: In process EngineCore (for V0-style LLMEngine use)
     * SyncMPClient: ZMQ + background proc EngineCore (for LLM)
     * AsyncMPClient: ZMQ + background proc EngineCore w/ asyncio (for AsyncLLM)
+
+    EngineCoreClient:子类负责处理不同方式与EngineCore进行推送（push）和拉取（pull）操作，以适配 asyncio 或多进程（multiprocessing）环境。
+    子类包括：
+    * InprocClient：进程内 EngineCore（用于 V0 风格的 LLMEngine）
+    * SyncMPClient：ZMQ + 后台进程 EngineCore（用于 LLM）
+    * AsyncMPClient：ZMQ + 后台进程 EngineCore，并使用 asyncio（用于 AsyncLLM）
     """
 
     @staticmethod
@@ -79,6 +85,8 @@ class EngineCoreClient(ABC):
         log_stats: bool,
     ) -> "EngineCoreClient":
         # TODO: support this for debugging purposes.
+
+        # 如果只用 asyncio 而不开多进程：CPU调度会成为瓶颈，容易卡死，稳定性和吞吐不可控，所以作者直接禁用这种组合，避免用户踩坑
         if asyncio_mode and not multiprocess_mode:
             raise NotImplementedError(
                 "Running EngineCore in asyncio without multiprocessing "
@@ -91,8 +99,10 @@ class EngineCoreClient(ABC):
             )
 
         if multiprocess_mode and not asyncio_mode:
+            #多进程+同步阻塞调用
+            #调用接口是同步阻塞的，适合离线批处理，简单推理，调试多进程行为
             return SyncMPClient(vllm_config, executor_class, log_stats)
-
+        #单进程+同步
         return InprocClient(vllm_config, executor_class, log_stats)
 
     @staticmethod
@@ -121,7 +131,7 @@ class EngineCoreClient(ABC):
             return DPLBAsyncMPClient(*client_args)
         return AsyncMPClient(*client_args)
 
-    @abstractmethod
+    @abstractmethod #抽象方法装饰器，表示这个方法是抽象的，子类必须实现它
     def shutdown(self): ...
 
     def get_output(self) -> EngineCoreOutputs:
@@ -263,6 +273,10 @@ class InprocClient(EngineCoreClient):
 
         * pushes EngineCoreRequest directly into the EngineCore
         * pulls EngineCoreOutputs by stepping the EngineCore
+    vLLM 的早期版本（v0 风格）使用的是“手动 step”模式：
+    用户调用 engine.add_request(...) 加请求
+    然后循环调用 engine.step() 来驱动推理（每次 step 处理一批，产生输出）
+    这是一种同步、阻塞式的批处理风格，非常像 HuggingFace Transformers 的 generate() 循环。
     """
 
     def __init__(self, *args, **kwargs):
@@ -810,7 +824,14 @@ class SyncMPClient(MPClient):
 
 
 class AsyncMPClient(MPClient):
-    """Asyncio-compatible client for multi-proc EngineCore."""
+    """Asyncio-compatible client for multi-proc EngineCore.
+    专为异步多进程（enginecore）模式设计的客户端实现
+
+    AsyncMPClient是vLLM异步引擎（AsyncLLM）用来和后台多进程EngineCore通信的“异步适配器”：
+    它负责把异步请求发送给EngineCore、异步接收输出，并用asyncio.Queue
+    把结果安全地传递给主循环
+
+    """
 
     def __init__(
         self,

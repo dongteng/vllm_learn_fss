@@ -24,7 +24,7 @@ def is_gcs(model_or_path: str) -> bool:
 
 
 def is_cloud_storage(model_or_path: str) -> bool:
-    return is_s3(model_or_path) or is_gcs(model_or_path)
+    return is_s3(model_or_path) or is_gcs(model_or_path) #判断模型路径在云存储还是本地磁盘
 
 
 def modelscope_list_repo_files(

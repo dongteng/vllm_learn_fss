@@ -39,42 +39,53 @@ class RequestOutputCollector:
 
     When streaming deltas, RequestOutputs are merged if the
     producer gets ahead of the consumer.
+    收集来自后端EngineCore产生的流式输出（RequestOutput或PoolingRequestOutput）
+    处理生产者比消费者跑得快的情况（即引擎生成结果的速度>用户通过async for拉取的速度）
+    实现增量合并（delta aggregation），避免用户收到重复或丢失的部分输出
+    同时支持阻塞式活去（get）和非阻塞获取（get_nowait）
+    当出现异常时，也能安全传递给消费者。
+    一句话说：是vLLM异步流式生成中，每个请求专属的“输出收集器+合并器+事件通知器”，确保生产者（引擎）和消费者（用户async iterator）之间高效、安全、正确地传递流式结果
     """
 
     def __init__(self, output_kind: RequestOutputKind, request_id: str):
-        self.aggregate = output_kind == RequestOutputKind.DELTA
+        self.aggregate = output_kind == RequestOutputKind.DELTA #决定输出是完整输出（FULL）还是增量（DELTA）
         self.request_id = request_id
-        self.output: RequestOutput | PoolingRequestOutput | Exception | None = None
-        self.ready = asyncio.Event()
+        self.output: RequestOutput | PoolingRequestOutput | Exception | None = None #当前累积的输出（或异常）
+        self.ready = asyncio.Event()#用于通知消费者 有新数据可以取了
 
     def put(self, output: RequestOutput | PoolingRequestOutput | Exception) -> None:
         """Non-blocking put operation."""
+        #第一次放入 ，或是异常->直接覆盖
         if self.output is None or isinstance(output, Exception):
             self.output = output
-            self.ready.set()
+            self.ready.set() #通知消费者有新数据了
         elif isinstance(self.output, RequestOutput) and isinstance(
             output, RequestOutput
         ):
             # This ensures that request outputs with different request indexes
             # (if n > 1) do not override each other.
+            #已经有累积输出+新来的是RequestOutput ->合并
             self.output.add(output, aggregate=self.aggregate)
         elif isinstance(self.output, PoolingRequestOutput) and isinstance(
             output, PoolingRequestOutput
         ):
+            #pooling模式
             self.output = output
 
     async def get(self) -> RequestOutput | PoolingRequestOutput:
         """Get operation blocks on put event."""
+        #异步阻塞获取
         while (output := self.output) is None:
-            await self.ready.wait()
-        self.output = None
-        self.ready.clear()
+            await self.ready.wait() #没东西就挂起等待
+        self.output = None          #取出后清空
+        self.ready.clear()          #重置事件
         if isinstance(output, Exception):
             raise output
         return output
 
     def get_nowait(self) -> RequestOutput | PoolingRequestOutput | None:
         """Non-blocking get operation."""
+        #用于轮询创景或不像阻塞的场合，有就取走并清空，没就返回None
         output = self.output
         if output is not None:
             self.output = None
@@ -347,7 +358,9 @@ class RequestState:
 
 
 class OutputProcessor:
-    """Process EngineCoreOutputs into RequestOutputs."""
+    """Process EngineCoreOutputs into RequestOutputs.
+    vLLM的输出后处理工厂：接收推理引擎的原始chunk，负责解码token->文本、计算Loggrobs、检查停止条件、合并 n>1 输出、推送给用户 queue、记录统计、处理 abort、OpenTelemetry tracing 等所有“非推理”但必须做的输出相关工作。
+    """
 
     def __init__(
         self,
@@ -367,18 +380,24 @@ class OutputProcessor:
         self._requests_drained.set()
 
     def get_num_unfinished_requests(self):
+        #返回当前还有多少个未完成的请求
         return len(self.request_states)
 
     def has_unfinished_requests(self) -> bool:
+        #判断是否还有任何未完成请求
         return len(self.request_states) > 0
 
     async def wait_for_requests_to_drain(self) -> None:
+        #异步等待所有请求处理完毕 如果现在就没有活跃请求 → 立刻返回
+        #否则 await _requests_drained 这个 Event，直到最后一个请求完成时被 set
         if not self.request_states:
             return
         await self._requests_drained.wait()
 
     def propagate_error(self, e: Exception):
-        """Propagate error to all generate() tasks."""
+        """Propagate error to all generate() tasks.
+        当发生严重错误时，把一场广播给所有活跃请求的queue，让每个generate()任务都能抛出这个异常
+        """
 
         for _, state in self.request_states.items():
             assert state.queue is not None
@@ -398,6 +417,8 @@ class OutputProcessor:
         In the case of parallel sampling, a request ID may be used to identify
         a parent request, in which case the associated child requests are aborted
         also.
+        批量终止指定的请求，支持external ID 和internal ID
+        支持中止parent请求时自动中止所有child
         """
 
         internal_req_ids = []
@@ -453,7 +474,7 @@ class OutputProcessor:
         self,
         request: EngineCoreRequest,
         prompt: str | None,
-        parent_req: ParentRequest | None = None,
+        parent_req: ParentRequest | None = None,#n>1时的父子关系
         request_index: int = 0,
         queue: RequestOutputCollector | None = None,
     ) -> None:
@@ -506,6 +527,13 @@ class OutputProcessor:
 
         If you need to touch every element of the batch, do it from
         within the loop below.
+        接收 EngineCore 发回的一批原始输出（EngineCoreOutput），
+        对每个输出逐个进行统计更新、detokenize（解码成文本）、停止条件检查、logprobs 计算、
+        生成 RequestOutput、推送到用户 queue（或收集返回），同时处理完成/中止逻辑、清理状态、
+        记录 tracing 和统计。
+
+        也就是说，vLLM 刻意把对整个 batch（一批请求）的 Python 循环压缩到只有这里一次，其他地方尽量避免遍历全 batch，就是为了极致降低 Python 解释器开销（高吞吐场景下 Python 循环很贵）。
+        所有对每个请求的处理（统计、解码、logprobs、make output、清理）都必须集中在这个 for 循环里完成。
         """
 
         request_outputs: list[RequestOutput | PoolingRequestOutput] = []
@@ -575,6 +603,8 @@ class OutputProcessor:
                     self.parent_requests.pop(parent_req.request_id, None)
                 if not self.request_states:
                     self._requests_drained.set()
+
+                #特殊情况：提前stop，返回“用户说停”
                 if not engine_core_output.finished:
                     # If req not finished in EngineCore, but Detokenizer
                     # detected stop string, abort needed in EngineCore.

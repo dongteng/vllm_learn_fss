@@ -2028,7 +2028,7 @@ class AsyncEngineArgs(EngineArgs):
     def add_cli_args(
         parser: FlexibleArgumentParser, async_args_only: bool = False
     ) -> FlexibleArgumentParser:
-        # Initialize plugin to update the parser, for example, The plugin may
+        # Initialize plugin to update the parser, for example, The plugin may    #作用是往argparse解析器里注册命令行参数
         # add a new kind of quantization method to --quantization argument or
         # a new device to --device argument.
         load_general_plugins()

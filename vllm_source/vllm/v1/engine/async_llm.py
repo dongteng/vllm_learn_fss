@@ -125,6 +125,9 @@ class AsyncLLM(EngineClient):
             log_stats=self.log_stats,
             stream_interval=self.vllm_config.scheduler_config.stream_interval,
         )
+        #如果用户配置了opentelemetry的traces导出地址，就为vllm的输出输出模块启用tracing功能，让它能把推理过程中的关键步骤（尤其是输出相关部分）上报到外部Observablity系统（如jaeger）
+        #为什么vLLM要加这个？生产环境最关心 从收到请求到返回花了多久，prefill阶段卡在哪里，解码每秒多少token，有没有OOM 超时异常？ 不通请求之间有没有关联？
+        #opentelemetry+otlp是目前最主流的标准化方案
         endpoint = self.observability_config.otlp_traces_endpoint
         if endpoint is not None:
             tracer = init_tracer("vllm.llm_engine", endpoint)
@@ -142,7 +145,7 @@ class AsyncLLM(EngineClient):
 
         # Loggers.
         self.logger_manager: StatLoggerManager | None = None
-        if self.log_stats:
+        if self.log_stats:#如果开启了统计日志功能，就创建一个统计日志管理器
             self.logger_manager = StatLoggerManager(
                 vllm_config=vllm_config,
                 engine_idxs=self.engine_core.engine_ranks_managed,
@@ -154,6 +157,7 @@ class AsyncLLM(EngineClient):
             self.logger_manager.log_engine_initialized()
 
         # Pause / resume state for async RL workflows.
+        #它俩一起组成了一个异步安全的“暂停/恢复”控制机制，专门设计给异步强化学习（async RL）工作流使用。
         self._pause_cond = asyncio.Condition()
         self._paused = False
 
@@ -165,10 +169,13 @@ class AsyncLLM(EngineClient):
         except RuntimeError:
             pass
 
+        #作用是有条件地为AsyncLLM的前端（python侧）启用Pytorch Profier(torch.profiler)，专门收集CPU活动追踪，并把结果保存到指定目录，用于后续性能分析
+        #只有满足2个条件才启用profiler
         if (
             vllm_config.profiler_config.profiler == "torch"
             and not vllm_config.profiler_config.ignore_frontend
         ):
+
             profiler_dir = vllm_config.profiler_config.torch_profiler_dir
             logger.info(
                 "Torch profiler enabled. AsyncLLM CPU traces will be collected under %s",  # noqa: E501
@@ -311,11 +318,13 @@ class AsyncLLM(EngineClient):
         self.input_processor.assign_request_id(request)
 
         # Create a new output collector for the request.
+        #每个请求都会对应一个独立的实例queue,这个queue就是后续用户async for out in response拉取结果的地方
         queue = RequestOutputCollector(params.output_kind, request.request_id)
 
         # Use cloned params that may have been updated in process_inputs()
         params = request.params
 
+        #单输出模式（n=1或pooling任务）
         if is_pooling or params.n == 1:
             await self._add_request(request, prompt_text, None, 0, queue)
             return queue
@@ -323,6 +332,7 @@ class AsyncLLM(EngineClient):
         parent_params = params
         assert isinstance(parent_params, SamplingParams)
 
+        #多输出模式（n>1）
         # Fan out child requests (for n>1).
         parent_request = ParentRequest(request)
         for idx in range(parent_params.n):
@@ -334,7 +344,7 @@ class AsyncLLM(EngineClient):
                 child_request, prompt_text, parent_request, idx, queue
             )
         return queue
-
+    #真正把一个请求加入调度和处理流程的核心方法
     async def _add_request(
         self,
         request: EngineCoreRequest,
@@ -343,6 +353,47 @@ class AsyncLLM(EngineClient):
         index: int,
         queue: RequestOutputCollector,
     ):
+        """
+        负责把用户请求同时注册到2个关键组件：
+        1.当前进程的OutputProcessor（输出处理器，负责合并、格式化、推送到用户stream）
+        2.EngineCore（推理引擎核心，负责调度、预填充、解码、kv cache管理等）
+        一句话总结：
+        把一个EngineCoreRequest（已经处理好的请求）同时投递给输出处理器和引擎核心，让请求开始被真正调度和执行，
+        同时把输出收集器（queue）绑定上去，方便后续用户拉取结果
+
+        用户调用 generate() / chat()
+            ↓
+        准备 EngineCoreRequest + RequestOutputCollector
+            ↓
+        调用 _add_request(request, prompt, parent, index, queue)
+            ├── 1. output_processor.add_request(...)   # 当前进程：注册输出路径
+            └── 2. await engine_core.add_request_async(...)  # 跨进程：把请求发给推理核心
+            ↓
+        引擎开始调度 → 产生输出 → OutputProcessor 处理 → put 到 queue
+            ↓
+        用户 async for out in response:   # 从 queue.get() 拉取
+
+
+        为啥2个add_request一个异步 一个同步？
+        AsyncLLM / AsyncEngine（前端，运行在主进程，通常是 API Server 进程）
+        负责接收 HTTP/gRPC 请求、预处理输入、创建 RequestOutputCollector、协调输出流
+        用 asyncio 事件循环处理并发
+
+        OutputProcessor（也在主进程里，和 AsyncLLM 同进程）
+        负责把 EngineCore 发回的原始输出（EngineCoreOutputs）转成用户友好的 RequestOutput
+        处理合并（n>1）、格式化、logprobs、detokenize 等
+        把结果 put 到每个请求的 collector queue
+
+        EngineCore（运行在独立进程，通常是多进程/多 GPU 布局）
+        真正的推理核心：调度器、连续批处理、预填充、解码、KV cache 管理、GPU forward
+        性能敏感、重计算部分，独立进程避免阻塞主进程
+
+        主进程（AsyncLLM + OutputProcessor）和 EngineCore 进程之间通过 IPC（如 multiprocessing.Queue、ZeroMQ、Ray 等）通信
+
+       一个同步一个异步的原因是OutputProcessor和AsyncLLM在同一个进程，只是普通的方法调用（内存操作、字典插入、列表append等）
+       EngineCore在另一个独立进程，需要通过IPC（如队列put）把request对象序列化/发送出去
+
+        """
         # Add the request to OutputProcessor (this process).
         self.output_processor.add_request(request, prompt, parent_req, index, queue)
 
@@ -357,6 +408,7 @@ class AsyncLLM(EngineClient):
     # requests we don't need to send multiple messages to core proc,
     # and so we don't need multiple streams which then get
     # re-multiplexed in the API server anyhow.
+    #目前这个接口一次只能处理一个prompt， 理想目标是一次请求船多个prompt，
     async def generate(
         self,
         prompt: EngineCoreRequest | PromptType,
@@ -383,12 +435,22 @@ class AsyncLLM(EngineClient):
 
         The caller of generate() iterates the returned AsyncGenerator,
         returning the RequestOutput back to the caller.
+        数文档字符串，说明这是API服务器调用的主要函数，流程包括：
+        创建与请求对应的异步流
+        处理输入
+        将请求添加到去分词器
+        将请求添加到独立的 EngineCore 进程
+        一个单独的 output_handler循环在后台运行
+        从 EngineCore 拉取输出并放入每个请求的异步流中
+        调用者通过迭代异步生成器获取 RequestOutput
         """
 
         if (
             self.vllm_config.cache_config.kv_sharing_fast_prefill
             and sampling_params.prompt_logprobs
         ):
+            #如果开启了kv-sharing-fast-prefill（一种加速prefill的优化，但是用户要logprobs->直接报错）
+            #因为fast prefill会牺牲prompt logprobs的准确性，因为是跳过计算或简化计算
             raise ValueError(
                 "--kv-sharing-fast-prefill produces incorrect logprobs for "
                 "prompt tokens, please disable it when the requests need "
@@ -400,9 +462,13 @@ class AsyncLLM(EngineClient):
             # We start the output_handler on the first call to generate() so
             # we can call __init__ before the event loop, which enables us
             # to handle startup failure gracefully in the OpenAI server.
+            #第一次调用 generate() 时才启动 output_handler 协程
+            #这个协程一直在后台运行：从 EngineCore 拉取原始输出 → OutputProcessor 处理 → put 到各个请求的 queue
+            #为什么延迟启动？因为 __init__ 可能在同步上下文调用，先启动 handler 能更好地处理启动失败
             self._run_output_handler()
 
             # Wait until generation is resumed if the engine is paused.
+            #等待引擎回复 如果被暂停（比如RL训练时PAUSE），就挂起等待resume
             async with self._pause_cond:
                 await self._pause_cond.wait_for(lambda: not self._paused)
 
@@ -416,6 +482,7 @@ class AsyncLLM(EngineClient):
                     tokenization_kwargs,
                 )
 
+            #返回的q就是这个请求专属的输出收集器
             q = await self.add_request(
                 request_id,
                 prompt,
@@ -445,6 +512,7 @@ class AsyncLLM(EngineClient):
         # If the request is disconnected by the client, generate()
         # is cancelled or the generator is garbage collected. So,
         # we abort the request if we end up here.
+        #浏览器关掉、客户端取消请求 → 立即 abort 请求，释放 KV cache 等资源
         except (asyncio.CancelledError, GeneratorExit):
             if q is not None:
                 await self.abort(q.request_id, internal=True)
@@ -453,18 +521,21 @@ class AsyncLLM(EngineClient):
             raise
 
         # Engine is dead. Do not abort since we shut down.
+        #引擎挂了 → 不 abort(因为已经死了)，直接抛给用户
         except EngineDeadError:
             if self.log_requests:
                 logger.info("Request %s failed (engine dead).", request_id)
             raise
 
         # Request validation error.
+        #参数校验错误
         except ValueError:
             if self.log_requests:
                 logger.info("Request %s failed (bad request).", request_id)
             raise
 
         # Unexpected error in the generate() task (possibly recoverable).
+        #其他意外错误
         except Exception as e:
             if q is not None:
                 await self.abort(q.request_id, internal=True)
@@ -480,6 +551,7 @@ class AsyncLLM(EngineClient):
 
         # Ensure that the task doesn't have a circular ref back to the AsyncLLM
         # object, or else it won't be garbage collected and cleaned up properly.
+        #确保task不会通过循环引用指向asyncLLM对象，否则它讲无法被垃圾回收并正确清理
         engine_core = self.engine_core
         output_processor = self.output_processor
         log_stats = self.log_stats
@@ -487,12 +559,16 @@ class AsyncLLM(EngineClient):
         input_processor = self.input_processor
 
         async def output_handler():
+            """
+            一个异步无限循环，是vllm异步引擎中负责从EngineCore拉取原始输出->处理->分发给用户queue的核心后台任务
+            """
             try:
-                while True:
+                while True: #永不结束的循环，只要引擎活着，它就一直在后台运行
                     # 1) Pull EngineCoreOutputs from the EngineCore.
-                    outputs = await engine_core.get_output_async()
-                    num_outputs = len(outputs.outputs)
+                    outputs = await engine_core.get_output_async() #从EngieCore中异步拉取一批已经完成的输出 EngineCoreOutputs
+                    num_outputs = len(outputs.outputs) #这次拉取到的输出数量（每个output对应一个请求的一次生成chunk）
 
+                    #如果开启了统计日志（log_stats=True）且有输出，就创建一个新的 IterationStats 对象，用于记录本次迭代的各种指标（TTFT、TPOT、KV cache 使用等）
                     iteration_stats = (
                         IterationStats() if (log_stats and num_outputs) else None
                     )
@@ -500,6 +576,7 @@ class AsyncLLM(EngineClient):
                     # Split outputs into chunks of at most
                     # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
                     # event loop for too long.
+                    #翻译：将输出拆分成不超过VLLM_V1_OUTPUT_PROC_CHUNK_SIZE的小块，这样就不会长时间阻塞事件循环
                     if num_outputs <= envs.VLLM_V1_OUTPUT_PROC_CHUNK_SIZE:
                         slices = (outputs.outputs,)
                     else:
@@ -508,22 +585,26 @@ class AsyncLLM(EngineClient):
                             cdiv(num_outputs, envs.VLLM_V1_OUTPUT_PROC_CHUNK_SIZE),
                         )
 
+                    #把一批模型输出分成若干小块，一块一块地处理。每处理一块，就主动让出event loop一次，防止系统卡死
+                    #同时，如果发现有请求因为stop tokens就提前结束，就立刻通知引擎终止它们
                     for i, outputs_slice in enumerate(slices):
                         # 2) Process EngineCoreOutputs.
+                        #process_outputs实际做了 把模型原始输出->转换成用户可读的请求结果+控制信号
+                        #里面通常包括detokenize ;stop string 判断; EOS判断; 生成RequestOutput;判断哪些请求可以中止
                         processed_outputs = output_processor.process_outputs(
                             outputs_slice, outputs.timestamp, iteration_stats
                         )
                         # NOTE: RequestOutputs are pushed to their queues.
+                        #异步下，RequestOutpt已经被put到queue了，所以processed_outputs.request_outputs 应该是空的（同步模式 LLMEngine 才会收集到 list）
                         assert not processed_outputs.request_outputs
 
                         # Allow other asyncio tasks to run between chunks
+                        #非常关键的让出控制权操作，在处理完小 chunk 后，主动 await asyncio.sleep(0)（相当于 yield），让事件循环有机会调度其他任务（新请求进来、HTTP 响应等）
                         if i + 1 < len(slices):
                             await asyncio.sleep(0)
 
                         # 3) Abort any reqs that finished due to stop strings.
-                        await engine_core.abort_requests_async(
-                            processed_outputs.reqs_to_abort
-                        )
+                        await engine_core.abort_requests_async(processed_outputs.reqs_to_abort)
 
                     output_processor.update_scheduler_stats(outputs.scheduler_stats)
 
@@ -560,8 +641,8 @@ class AsyncLLM(EngineClient):
     async def pause_generation(
         self,
         *,
-        wait_for_inflight_requests: bool = False,
-        clear_cache: bool = True,
+        wait_for_inflight_requests: bool = False, #是否等待当前正在飞的请求，自然完成后再暂停
+        clear_cache: bool = True,#暂停后是否清空kv cache和prefix cache
     ) -> None:
         """
         Pause generation to allow model weight updates.
@@ -575,6 +656,8 @@ class AsyncLLM(EngineClient):
             clear_cache: Whether to clear KV cache and prefix cache after
                 draining. Set to ``False`` to preserve cache for faster resume.
                 Default is ``True`` (clear caches).
+        在需要更新权重时，安全地暂停所有正在进行的生成任务，让系统进入”静止“状态，以便后续进行权重更新或资源释放。
+
         """
 
         async with self._pause_cond:

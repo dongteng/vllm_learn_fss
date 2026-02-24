@@ -29,16 +29,16 @@ class ObservabilityConfig:
     in an upcoming release."""
 
     @cached_property
-    def show_hidden_metrics(self) -> bool:
+    def show_hidden_metrics(self) -> bool: #根据版本字符串判断是否真的要显示隐藏指标
         """Check if the hidden metrics should be shown."""
         if self.show_hidden_metrics_for_version is None:
             return False
         return version._prev_minor_version_was(self.show_hidden_metrics_for_version)
 
-    otlp_traces_endpoint: str | None = None
+    otlp_traces_endpoint: str | None = None #OpenTelemetry traces 的接收端点（collector 的 URL）
     """Target URL to which OpenTelemetry traces will be sent."""
 
-    collect_detailed_traces: list[DetailedTraceModules] | None = None
+    collect_detailed_traces: list[DetailedTraceModules] | None = None #指定要收集详细追踪的模块列表（比如 ["model", "worker", "all"]）。
     """It makes sense to set this only if `--otlp-traces-endpoint` is set. If
     set, it will collect detailed traces for the specified modules. This
     involves use of possibly costly and or blocking operations and hence might
@@ -47,22 +47,22 @@ class ObservabilityConfig:
     Note that collecting detailed timing information for each request can be
     expensive."""
 
-    kv_cache_metrics: bool = False
+    kv_cache_metrics: bool = False #是否开启 KV cache 的驻留指标（residency metrics）。收集的内容：KV block 的 lifetime（存活时间），idle time（空闲时间），reuse gaps（复用间隔）
     """Enable KV cache residency metrics (lifetime, idle time, reuse gaps).
     Uses sampling to minimize overhead.
     Requires log stats to be enabled (i.e., --disable-log-stats not set)."""
 
-    kv_cache_metrics_sample: float = Field(default=0.01, gt=0, le=1)
+    kv_cache_metrics_sample: float = Field(default=0.01, gt=0, le=1) #默认 0.01 = 1%，意思是只随机采样 1% 的 KV block 来统计，降低开销。
     """Sampling rate for KV cache metrics (0.0, 1.0]. Default 0.01 = 1% of blocks."""
 
-    cudagraph_metrics: bool = False
+    cudagraph_metrics: bool = False #是否开启 CUDA Graph 相关的指标统计。
     """Enable CUDA graph metrics (number of padded/unpadded tokens, runtime cudagraph
     dispatch modes, and their observed frequencies at every logging interval)."""
 
-    enable_layerwise_nvtx_tracing: bool = False
+    enable_layerwise_nvtx_tracing: bool = False #是否开启逐层 NVTX tracing（NVIDIA 的性能分析标记）。
     """Enable layerwise NVTX tracing. This traces the execution of each layer or
     module in the model and attach informations such as input/output shapes to
-    nvtx range markers. Noted that this doesn't work with CUDA graphs enabled."""
+    nvtx range markers. Noted that this doesn't work with CUDA graphs enabled.""" #注意：和 CUDA Graph 冲突！开启 CUDA Graph 时这个功能会失效。
 
     enable_mfu_metrics: bool = False
     """Enable Model FLOPs Utilization (MFU) metrics."""

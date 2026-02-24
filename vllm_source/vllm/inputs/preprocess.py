@@ -90,6 +90,7 @@ class InputPreprocessor:
         Obtain the decoder start token id employed by an encoder/decoder
         model. Returns None for non-encoder/decoder models or if the
         model config is unavailable.
+        获取其实token id
         """
 
         if not self.model_config.is_encoder_decoder:
@@ -148,6 +149,15 @@ class InputPreprocessor:
 
         Returns:
 
+        * prompt_token_ids
+
+        专门针对 encoder/decoder 模型：当用户只指定了 encoder prompt 时，生成一个默认的 decoder prompt。
+        encoder/decoder 模型会以不同的方式使用 decoder prompt；随着新模型的不断加入，预计这个函数会得到扩展，以便根据不同的模型类型生成不同的默认 decoder prompt。
+        在没有特殊情况时，本方法的默认行为是模仿 HuggingFace (HF) GenerationMixin 在 decoder prompt 为 None 时的处理逻辑，即通过 logit processor 强制第一个解码 token 为 <BOS>。
+        在这里，我们通过将“默认” decoder prompt 设置为 <BOS> 来近似实现这一行为。
+        然而，未来可能会有其他模型采用不同或更复杂的默认 decoder prompt 逻辑。
+        因此，专门为此设计了一个辅助方法来处理默认 decoder prompt。
+        返回：
         * prompt_token_ids
         """
 
@@ -377,7 +387,11 @@ class InputPreprocessor:
                 tokenization_kwargs=tokenization_kwargs,
             )
             inputs = token_inputs(prompt_token_ids)
-
+        #cache_salt 是 vLLM 中用于控制 prefix caching（前缀缓存 / 自动前缀缓存）隔离的一个可选参数。
+        #vLLM默认开启 prefixcaching：如果多个请求的前缀（prompt前半部分）完全相同，后续请求可以直接复用前面的
+        # KVcache，大幅加速生成。但在多租户（multi - tenant）、共享实例、隐私敏感场景下，你不希望不同用户 / 不同会话之间随意共享
+        # KVcache（可能泄露上下文或污染缓存）。这时cache_salt就派上用场：它会被注入到第一个KVblock的hash计算中，导致即使
+        # prompt前缀完全一样，只要salt不同，KVcache就完全隔离，无法复用。
         if cache_salt := parsed_content.get("cache_salt"):
             inputs["cache_salt"] = cache_salt
 
@@ -391,6 +405,7 @@ class InputPreprocessor:
         mm_uuids: MultiModalUUIDDict | None = None,
     ) -> SingletonInputs:
         """
+        把用户传入的单个prompt统一转换成模型真正能吃的输入格式，为后续tokenization、多模态处理、embedding bypass等做准备
         Extract the singleton inputs from a prompt.
 
         Arguments:
@@ -423,7 +438,7 @@ class InputPreprocessor:
                 mm_uuids=mm_uuids,
             )
 
-        assert_never(parsed)
+        assert_never(parsed)#assert_never(xxx)，就等于在说：“这里不应该有任何值进来，如果进来了，说明我写错了！
 
     def _build_enc_dec_llm_inputs(
         self,
@@ -673,7 +688,7 @@ class InputPreprocessor:
         # Decoder-only operation
         # `cast` is needed for mypy, but not pyright
         return self._process_decoder_only_prompt(
-            cast(SingletonPrompt, prompt),
+            cast(SingletonPrompt, prompt),#虽然 prompt 的静态类型可能是 PromptType | str | List[int] | ...（比较宽泛的联合类型），但我现在确定它符合 SingletonPrompt 的形状（vLLM 里定义的一个 TypeAlias），所以请你把它的类型当作 SingletonPrompt 来对待，别再报类型不匹配的错误了。
             tokenization_kwargs=tokenization_kwargs,
             mm_uuids=mm_uuids,
         )

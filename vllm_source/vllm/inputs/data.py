@@ -137,6 +137,21 @@ where the decoder-prompt is not specified explicitly, or
 (3) as a member of a larger data structure encapsulating
 more than one prompt, i.e. 
 [`ExplicitEncoderDecoderPrompt`][vllm.inputs.data.ExplicitEncoderDecoderPrompt]
+单个 prompt 可能采用的模式集合：
+
+- 纯文本 prompt（可以是普通的 [`str`][]，或者 [`TextPrompt`][vllm.inputs.data.TextPrompt] 结构）
+- 已分词的 prompt（[`TokensPrompt`][vllm.inputs.data.TokensPrompt]）
+- 直接传入 embedding 向量的 prompt（[`EmbedsPrompt`][vllm.inputs.data.EmbedsPrompt]）
+
+注意这里的 "singleton"（单一的）是相对于“封装了多个 prompt 的数据结构”而言的。
+比如在 encoder-decoder 模型中，用户可能需要同时显式指定 encoder prompt 和 decoder prompt，
+这时会使用 [`ExplicitEncoderDecoderPrompt`][vllm.inputs.data.ExplicitEncoderDecoderPrompt] 这样的复合结构。
+
+而 [`SingletonPrompt`][vllm.inputs.data.SingletonPrompt] 类型的 prompt 可以用在以下场景：
+
+1. 作为 decoder-only 模型的直接输入（最常见的情况）
+2. 作为 encoder-decoder 模型中 encoder 部分的输入（当 decoder prompt 没有被显式指定时）
+3. 作为更大复合结构的一个组成部分，例如出现在 [`ExplicitEncoderDecoderPrompt`][vllm.inputs.data.ExplicitEncoderDecoderPrompt] 里
 """
 
 
@@ -208,7 +223,10 @@ both decoder-only and encoder/decoder input types:
 
 
 class TokenInputs(TypedDict):
-    """Represents token-based inputs."""
+    """Represents token-based inputs.
+    纯token输入，
+
+    """
 
     type: Literal["token"]
     """The type of inputs."""
@@ -216,7 +234,7 @@ class TokenInputs(TypedDict):
     prompt_token_ids: list[int]
     """The token IDs of the prompt."""
 
-    cache_salt: NotRequired[str]
+    cache_salt: NotRequired[str] #用于隔离prefix cache，如果两个请求的 prompt 前缀相同，但 cache_salt 不同 → 强制不复用缓存（生成独立 KV cache）
     """
     Optional cache salt to be used for prefix caching.
     """

@@ -46,17 +46,18 @@ class InputProcessor:
         tokenizer: TokenizerLike | None,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
     ) -> None:
-        self.vllm_config = vllm_config
+        self.vllm_config = vllm_config #vLLM 的全局配置（模型、缓存、LoRA、结构化输出等全都在里面）
         self.model_config = vllm_config.model_config
         self.cache_config = vllm_config.cache_config
         self.lora_config = vllm_config.lora_config
-        self.structured_outputs_config = vllm_config.structured_outputs_config
+        self.structured_outputs_config = vllm_config.structured_outputs_config #结构化输出（JSON schema 等）支持
 
         self.generation_config_fields = self.model_config.try_get_generation_config()
 
         self.mm_registry = mm_registry
         self.mm_processor_cache = processor_cache_from_config(vllm_config, mm_registry)
 
+        #用户原始输入->模型能直接吃的输入的预处理核心组件
         self.input_preprocessor = InputPreprocessor(
             self.model_config,
             tokenizer,
@@ -72,7 +73,12 @@ class InputProcessor:
         self,
         params: SamplingParams,
     ) -> None:
-        max_logprobs = self.model_config.max_logprobs
+        """
+        在用户请求 logprobs（或 prompt_logprobs）时，检查请求的数量是否合理，防止用户要的 logprobs 数量超过模型真正能承受的上限，
+        从而避免内存爆炸、显存溢出、推理崩溃或严重性能下降。
+        logprobs 这个功能虽然强大，但非常耗资源 , 如果用户要 prompt_logprobs = 全词表 → prompt 每 token 都返回 128k 个值 → 数据量直接爆炸
+        """
+        max_logprobs = self.model_config.max_logprobs #拿到配置里允许的最大的logprobs数量
         if max_logprobs == -1:
             max_logprobs = self.model_config.get_vocab_size()
 
@@ -102,8 +108,12 @@ class InputProcessor:
         self,
         params: SamplingParams,
     ) -> None:
-        self._validate_structured_output(params)
-        self._validate_logit_bias(params)
+        """
+        对用户传入的采样参数（SamplingParams）做合法性检查，尤其是针对 allowed_token_ids 这个字段，确保它不会导致后续推理崩溃或产生无意义的结果。
+        它是一个典型的“防呆 + 防御性校验”函数，在 vLLM 里属于采样参数进入引擎前的第一道关卡。
+        """
+        self._validate_structured_output(params) #检查结构化输出（JSON schema、grammar、正则等）是否合法
+        self._validate_logit_bias(params) #检查 logit_bias 字典的 key 是否合法 token id、value 是否合理
 
         if params.allowed_token_ids is None:
             return
@@ -114,6 +124,7 @@ class InputProcessor:
             # Skip validation and let the model handle invalid tokens
             return
         vocab_size = len(self.tokenizer)
+        #遍历用户传的所有token id是否满足 ：0 ≤ tid < vocab_size
         if not all(0 <= tid < vocab_size for tid in params.allowed_token_ids):
             raise ValueError("allowed_token_ids contains out-of-vocab token id!")
 
@@ -144,11 +155,14 @@ class InputProcessor:
     ) -> None:
         # Logits processors not supported.
         if params.logits_processors:
+            #用户传一个列表，在每步生成前修改logits（比如强制某些token概率为0、加bias、加grammar约束等）
+            #vLLM V1 当前还不支持这种 per-request 的用户自定义 logits processor（可能是性能、安全或实现复杂度的原因）
             raise ValueError(
                 "vLLM V1 does not support per request user provided logits processors."
             )
         # Async scheduling + spec decode currently incompatible with some
         # sampling parameters.
+        #如果同时开启了推测解码（speculative decoding）并且使用了异步调度（async scheduling），那么以下采样参数都不允许使用
         if (
             self.vllm_config.speculative_config is not None
             and self.vllm_config.scheduler_config.async_scheduling
@@ -187,6 +201,11 @@ class InputProcessor:
         multi_modal_data in the incoming request prompt(s).
         Only checks lengths; `None` entries are allowed and will be
         auto-hashed downstream.
+        简单来说就是一个防呆校验：多模态数据有几块，UUID也必须是几块 不能多也不能少
+        为什么需要这个检验？
+        vllm的多模态处理会把图片/视频等数据处理成tensor并插入特殊的 placeholder token（如 <image>）到 token 序列中。
+        为了在 KV cache 中正确管理这些多模态部分，vLLM 给每个多模态块分配一个唯一的 UUID（multi_modal_uuids），用来追踪“这个 placeholder 对应哪块图片/视频”。
+
         """
 
         def _validate_single_prompt(single_prompt: dict | str) -> None:
@@ -259,14 +278,23 @@ class InputProcessor:
             )
 
     def _validate_structured_output(self, params: SamplingParams) -> None:
+        """
+        结构化输出 参数校验
+        """
+        #1.基本检查+跳过逻辑。如果用户没要结构化输出（structured_outputs 是 None 或空），或者引擎压根没开启结构化输出支持（structured_outputs_config 为空） → 直接返回，不做任何校验
+        #这是最常见的路径：绝大多数请求不使用结构化输出，直接跳过
         if not params.structured_outputs or not self.structured_outputs_config:
             return
 
+        #2.禁止 skip_tokenizer_init + structured_outputs 组合结构化输出（尤其是 grammar、正则、JSON schema）必须依赖 tokenizer（因为要知道特殊 token、词汇表、token 映射）
+        #如果用户开了 skip_tokenizer_init=True（不加载 tokenizer，只加载权重，节省内存），就无法支持结构化输出
         if self.model_config.skip_tokenizer_init and params.structured_outputs:
             raise ValueError(
                 "Structured outputs requires a tokenizer so it can't be used with 'skip_tokenizer_init'"  # noqa: E501
             )
 
+        #3.backend兼容性校验，拿到引擎启动时配置的全局 backend（比如 "xgrammar"、"guidance"、"outlines" 或 "auto"）
+        #检查用户是否在请求里显式指定了 backend（_backend），vLLM 不支持在单个请求里覆盖全局 backend（为了保持一致性和简化实现），只有一种例外允许：全局是 "auto"，且之前是自动选的（_backend_was_auto），可以覆盖，其他情况 → 直接报错：“你不能在请求里指定 backend，只能用启动时配置的那个”
         backend = self.structured_outputs_config.backend
         if _backend := params.structured_outputs._backend:
             # Request-level backend selection is not supported.
@@ -287,6 +315,7 @@ class InputProcessor:
             params.structured_outputs._backend = backend
 
         # Request content validation
+        #4.请求内容合法性校验
         if (
             isinstance(params.structured_outputs.choice, list)
             and not params.structured_outputs.choice

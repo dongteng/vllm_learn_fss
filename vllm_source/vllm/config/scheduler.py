@@ -29,7 +29,7 @@ class SchedulerConfig:
     """Scheduler configuration."""
 
     max_model_len: InitVar[int]
-    """Maximum length of a sequence (including prompt and generated text).
+    """Maximum length of a sequence (including prompt and generated text). 
 
     Note: This is stored in the ModelConfig, and is used only here to
     provide fallbacks and validate other attributes."""
@@ -105,9 +105,9 @@ class SchedulerConfig:
     - "fcfs" means first come first served, i.e. requests are handled in order
     of arrival.\n
     - "priority" means requests are handled based on given priority (lower
-    value means earlier handling) and time of arrival deciding any ties)."""
+    value means earlier handling) and time of arrival deciding any ties).""" #priority 模式,优先级越小（e.g. 0 > 1 > 10），越先被调度。
 
-    disable_chunked_mm_input: bool = False
+    disable_chunked_mm_input: bool = False #当这个开关打开（=True）并且 chunked prefill 启用时 ,不允许把一个多模态 item（比如一张完整的图片）拆成多块调度。遇到上面场景时，会整块跳过图片部分：第二步：等到显存够了，再一次性调度完整的 I I I I I I I I I I
     """If set to true and chunked prefill is enabled, we do not want to
     partially schedule a multimodal item. Only used in V1
     This ensures that if a request has a mixed prompt
@@ -122,7 +122,7 @@ class SchedulerConfig:
     the default scheduler. Can be a class directly or the path to a class of
     form "mod.custom_class"."""
 
-    disable_hybrid_kv_cache_manager: bool | None = None #是否禁用“混合 KV cache 管理”（对有 sliding-window + full attention 混合的模型有用）
+    disable_hybrid_kv_cache_manager: bool | None = None
     """If set to True, KV cache manager will allocate the same size of KV cache
     for all attention layers even if there are multiple type of attention layers
     like full attention and sliding window attention.
@@ -140,7 +140,7 @@ class SchedulerConfig:
     stream_interval: int = Field(default=1, ge=1) #每生成多少token才向客户端发送一次 如果设成 10  vLLM 会先在内存里攒够 10 个 token，再一次性把这 10 个发给客户端  客户端看到的是“一次跳出好几个词”，而不是一个一个冒出来
     """The interval (or buffer size) for streaming in terms of token length.
     A smaller value (1) makes streaming smoother by sending each token immediately,
-    while a larger value (e.g., 10) reduces host overhead and may increase throughput
+    while a larger value (e.g., 10) reduces host overhead and may increase throughput #好处：减少了网络发送次数，降低服务器 CPU/网络负载，尤其在高并发或弱网环境下能提升整体吞吐
     by batching multiple tokens before sending."""
 
     @staticmethod
