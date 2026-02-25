@@ -52,6 +52,7 @@ from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, bytestr
 
 logger = init_logger(__name__)
 
+#定义一个类型别名（type alias），名字叫AnyFuture
 AnyFuture: TypeAlias = asyncio.Future[Any] | Future[Any]
 
 _R = TypeVar("_R")  # Return type for collective_rpc
@@ -437,6 +438,10 @@ class BackgroundResources:
                     shutdown_sender.send(b"")
 
     def validate_alive(self, frames: Sequence[zmq.Frame]):
+        """
+        frames: Sequence[zmq.Frame] 表示：这是一个 ZeroMQ 消息帧列表，frames = [frame1, frame2, frame3, ...]
+        每个 zmq.Frame 就是一小段 二进制消息。
+        """
         if len(frames) == 1 and (frames[0].buffer == EngineCoreProc.ENGINE_CORE_DEAD):
             self.engine_dead = True
             raise EngineDeadError()
@@ -453,6 +458,19 @@ class MPClient(EngineCoreClient):
 
         * AsyncMPClient subclass for AsyncLLM usage
         * SyncMPClient subclass for LLM usage
+    MPClient：多进程 EngineCore 的基础客户端。
+
+    EngineCore 在后台进程中以忙等待循环（busy loop）的方式持续运行，负责：
+    - 接收新的 EngineCoreRequest 请求
+    - 返回 EngineCoreOutput 输出结果
+
+    MPClient 的主要职责：
+    - 通过 input_socket 向 EngineCore 推送 EngineCoreRequest
+    - 通过 output_socket 从 EngineCore 拉取 EngineCoreOutput
+
+    派生类：
+    - AsyncMPClient：专为异步接口 AsyncLLM 设计的子类
+    - SyncMPClient：专为同步接口 LLM 设计的子类
     """
 
     def __init__(
@@ -638,15 +656,26 @@ class MPClient(EngineCoreClient):
 def _process_utility_output(
     output: UtilityOutput, utility_results: dict[int, AnyFuture]
 ):
-    """Set the result from a utility method in the waiting future."""
+    """Set the result from a utility method in the waiting future.
+    在 vLLM 里，除了正常的“生成文本”（generate）这种大任务，还有一些小的、辅助性的查询，比如：
+    当前还有多少个请求在排队？GPU显存还剩多少？这个模型支持哪些采样参数？把KV 缓存清一下
+    这些小查询不走正常的生成流程，而是直接调用 EngineCore 里的某些工具函数（utility methods），执行完后会返回一个 UtilityOutput。
+    而这些小查询通常是用 asyncio.Future 来等待结果的（类似一个“收据”，拿着它等着结果回来）。
+
+    所以就有了这套机制：
+    有人调用工具 → 产生一个 call_id + 一个 Future
+    请求发给 EngineCore
+    EngineCore 执行完 → 返回 UtilityOutput（里面有 call_id + 结果 或 错误）
+    _process_utility_output 收到这个 UtilityOutput → 根据 call_id 找到对应的 Future → 把结果或异常塞进去
+    """
     future = utility_results.pop(output.call_id)
     failure_message = output.failure_message
     try:
-        if failure_message is not None:
+        if failure_message is not None:  #先看看有没有失败原因
             future.set_exception(Exception(failure_message))
         else:
             assert output.result is not None
-            future.set_result(output.result.result)
+            future.set_result(output.result.result) #把成功的结果塞进future
     except asyncio.InvalidStateError:
         # This can happen if the future is cancelled due to the
         # original calling task being cancelled.
@@ -825,12 +854,11 @@ class SyncMPClient(MPClient):
 
 class AsyncMPClient(MPClient):
     """Asyncio-compatible client for multi-proc EngineCore.
-    专为异步多进程（enginecore）模式设计的客户端实现
-
-    AsyncMPClient是vLLM异步引擎（AsyncLLM）用来和后台多进程EngineCore通信的“异步适配器”：
-    它负责把异步请求发送给EngineCore、异步接收输出，并用asyncio.Queue
-    把结果安全地传递给主循环
-
+    AsyncMPClient 是 vLLM 异步引擎（AsyncLLMEngine）与后台多进程 EngineCore 之间的**异步通信桥梁**。
+    它主要做三件事：
+        把异步来的请求（generate, abort 等）转发给多进程的 EngineCore
+        接收 EngineCore 的输出（token、finished、error 等）
+        通过 asyncio.Queue 把结果安全地送回给主 asyncio 事件循环里的各个请求协程
     """
 
     def __init__(
@@ -852,19 +880,32 @@ class AsyncMPClient(MPClient):
 
         self.client_count = client_count
         self.client_index = client_index
+
+        #异步队列，用来在多个协程之间传递引擎输出结果或异常
         self.outputs_queue = asyncio.Queue[EngineCoreOutputs | Exception]()
         try:
             # If we are running in an asyncio event loop, start the queue task.
             # Otherwise, it will be started lazily. If it is not started here,
             # we could miss EXECUTOR_FAILED messages from engine core if they
             # occur prior to any requests being sent.
-            asyncio.get_running_loop()
+            #如果当前正在一个asyncio事件循环中运行，就立即启动队列处理任务。
+            #否则这个任务会延迟启动（lazy start）
+            #如果这里不启动，我们可能会错过 EngineCore 在任何请求发送之前就发出的 EXECUTOR_FAILED 消息。
+            #为了尽早、可靠地暴露“引擎根本启动失败”的致命错误，而不是让调用方永远挂起。
+            asyncio.get_running_loop() #获取当前运行的asyncio事件循环 ，如果成功，就说明当前已经在asyncio事件循环里执行
             self._ensure_output_queue_task()
         except RuntimeError:
             pass
 
     def _ensure_output_queue_task(self):
+        """
+        整个AsyncMPClinet里最核心、关键的后台任务启动逻辑.
+        在单独的asyncio任务里持续监听来自EngineCore的输出socket(ZMQ),把收到的每一帧数据解码、处理，然后把结果安全地放入到asyncio.Queue供主逻辑使用
+
+        """
         resources = self.resources
+        #resources.output_queue_task 是共享状态（通常放在一个共享的资源对象里
+        #只要任务已经创建过，就直接返回，避免重复创建多个相同的读取协程
         if resources.output_queue_task is not None:
             return
 
@@ -873,9 +914,13 @@ class AsyncMPClient(MPClient):
         decoder = self.decoder
         utility_results = self.utility_results
         outputs_queue = self.outputs_queue
+
+        #从当前类的类属性/方法中，尝试一个名为process_engine_outputs的方法
         output_handler: (
             Callable[[AsyncMPClient, EngineCoreOutputs], Awaitable[None]] | None
         ) = getattr(self.__class__, "process_engine_outputs", None)
+
+
         _self_ref = weakref.ref(self) if output_handler else None
         output_socket = resources.output_socket
         assert output_socket is not None
@@ -883,7 +928,9 @@ class AsyncMPClient(MPClient):
         async def process_outputs_socket():
             try:
                 while True:
+                    #copy=False表示不复制数据，直接使用原始数据  。还能使用原数据？
                     frames = await output_socket.recv_multipart(copy=False)
+                    #
                     resources.validate_alive(frames)
                     outputs: EngineCoreOutputs = decoder.decode(frames)
                     if outputs.utility_output:
@@ -905,6 +952,7 @@ class AsyncMPClient(MPClient):
             except asyncio.CancelledError:
                 outputs_queue.put_nowait(EngineDeadError())
 
+        #把协程任务包装成task ,task是Future的子类，立即安排执行，不会阻塞当前代码，返回一个 future / task 对象，你可以用它 await 或 cancel
         resources.output_queue_task = asyncio.create_task(
             process_outputs_socket(), name="EngineCoreOutputQueueTask"
         )
@@ -1270,9 +1318,16 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
     async def process_engine_outputs(
         self: "DPLBAsyncMPClient", outputs: EngineCoreOutputs
     ):
+        """
+        把engine返回的已经完成的请求，从客户端的”正在处理请求列表“里移除。
+        self: "DPLBAsyncMPClient"为什么是字符串类型注解？
+        Python 解释器在遇到这个字符串时不会立即查找类名，只有在真正做类型检查或者运行时 eval 类型时，才会解析字符串里的类名
+        为什么要前向引用？
+        如果不加引号：Python 在解析函数签名时，看到 DPLBAsyncMPClient 还没完全定义，就会报 NameError，因为类本身还没创建完成
+        """
         if outputs.finished_requests and self.reqs_in_flight:
             for req_id in outputs.finished_requests:
-                self.reqs_in_flight.pop(req_id, None)
+                self.reqs_in_flight.pop(req_id, None) #把已完成的请求从正在运行中的请求中删掉
 
     async def abort_requests_async(self, request_ids: list[str]) -> None:
         if not request_ids or self.resources.engine_dead:

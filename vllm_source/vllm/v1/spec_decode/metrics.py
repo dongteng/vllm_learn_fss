@@ -20,12 +20,14 @@ class SpecDecodingStats:
     Each scheduler step, statistics on spec decoding performance are
     aggregated across requests by the scheduler and returned to the
     frontend in EngineCoreOutputs->SchedulerStats.
+    调度器每步迭代的推测解码统计数据。
+    每个调度器步骤，调度器都会将推测解码性能的统计信息在所有请求中汇总，并通过 EngineCoreOutputs->SchedulerStats 返回给前端。
     """
 
     num_spec_tokens: int
-    num_drafts: int = 0
-    num_draft_tokens: int = 0
-    num_accepted_tokens: int = 0
+    num_drafts: int = 0 #统计这一步里，调度器总共让 draft model 猜测了几次（每个请求可能有 0 或 1 次 draft）
+    num_draft_tokens: int = 0 #draft model 产生的总 token 数（比如 draft 了 5 次，每次猜 4 个 → 20）
+    num_accepted_tokens: int = 0 #最终被大模型验证通过、真正采纳的推测 token 总数
     num_accepted_tokens_per_pos: list[int] = field(default_factory=list)
 
     @classmethod

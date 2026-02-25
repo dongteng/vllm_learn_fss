@@ -161,10 +161,11 @@ class AsyncLLM(EngineClient):
         self._pause_cond = asyncio.Condition()
         self._paused = False
 
+        #尝试启动输出处理任务
         self.output_handler: asyncio.Task | None = None
         try:
             # Start output handler eagerly if we are in the asyncio eventloop.
-            asyncio.get_running_loop()
+            asyncio.get_running_loop() #拿事件循环，如果没有会抛出runtimeerror
             self._run_output_handler()
         except RuntimeError:
             pass
@@ -408,7 +409,7 @@ class AsyncLLM(EngineClient):
     # requests we don't need to send multiple messages to core proc,
     # and so we don't need multiple streams which then get
     # re-multiplexed in the API server anyhow.
-    #目前这个接口一次只能处理一个prompt， 理想目标是一次请求船多个prompt，
+    #目前这个接口一次只能处理一个prompt， 理想目标是一次请求传多个prompt，
     async def generate(
         self,
         prompt: EngineCoreRequest | PromptType,
@@ -544,14 +545,22 @@ class AsyncLLM(EngineClient):
             raise EngineGenerateError() from e
 
     def _run_output_handler(self):
-        """Background loop: pulls from EngineCore and pushes to AsyncStreams."""
+        """Background loop: pulls from EngineCore and pushes to AsyncStreams.
+        不停地从EngineCore拉输出->处理->推送给用户->记录日志。
+        一个永不停止的后台异步任务，专门负责消费引擎输出+处理+分发
+
+        为啥要_run_output_handler?
+        可以把AsyncLLM想成一个异步服务器： 前台不停接收用户请求，后台不停从EngineCore里拿模型输出
+        如果没有这个后台任务，生成结果会堆在EngineCore里，没人处理，用户永远收不到token
+        """
 
         if self.output_handler is not None:
             return
 
         # Ensure that the task doesn't have a circular ref back to the AsyncLLM
         # object, or else it won't be garbage collected and cleaned up properly.
-        #确保task不会通过循环引用指向asyncLLM对象，否则它讲无法被垃圾回收并正确清理
+        #确保task不会通过循环引用指向asyncLLM对象，否则它将无法被垃圾回收并正确清理
+        #如果内部直接用self.engine_core，那么self --> output_handler task --> self 就会形成循环引用，对象永远不会被GC回收，内存泄露
         engine_core = self.engine_core
         output_processor = self.output_processor
         log_stats = self.log_stats
@@ -718,6 +727,19 @@ class AsyncLLM(EngineClient):
 
         NOTE: truncate_prompt_tokens is deprecated in v0.14.
         TODO: Remove truncate_prompt_tokens in v0.15.
+        API 服务器调用的主要函数，用来启动一个请求
+            * 1) 为这个请求创建一个对应的异步流（AsyncStream）。
+            * 2) 处理输入。
+            * 3) 把请求添加到 EngineCore（独立的进程）中。
+
+        一个独立的 output_handler 循环会在后台的 AsyncIO 任务中运行，
+        从 EngineCore 拉取输出，并把它们放入每个请求专属的 AsyncStream 中。
+
+        generate() 的调用者会迭代这个返回的 AsyncGenerator，把 RequestOutput 逐个返回给调用者。
+
+        注意：truncate_prompt_tokens 在 v0.14 中已弃用。
+        TODO: 在 v0.15 中移除 truncate_prompt_tokens。
+        当有人向服务器发送 POST /v1/embeddings 或 POST /pooling 请求时（OpenAI 风格的 embedding 端点，或 vLLM 专有的 pooling 端点）。
         """
 
         q: RequestOutputCollector | None = None

@@ -1241,6 +1241,10 @@ class StatLoggerManager:
         This class abstracts away this implementation detail from
         the AsyncLLM, allowing the AsyncLLM to just call .record()
         and .log() to a simple interface.
+        日志记录是在 EngineCore 层面（每个调度器）进行的。
+        DP（数据并行）场景：如果每个 AsyncLLM 有多个 EngineCore，就需要为每个 EngineCore 分配单独的 logger。
+        使用本地 Logger 时，只需为 N 个 EngineCore 复制 N 个 logger 即可。
+        使用 Prometheus 时，需要一个 logger，但要带 N 个“标签”（labels）来区分每个 EngineCore
     """
 
     def __init__(

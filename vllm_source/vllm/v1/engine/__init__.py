@@ -121,10 +121,10 @@ class EngineCoreOutput(
     msgspec.Struct,
     array_like=True,  # type: ignore[call-arg]
     omit_defaults=True,  # type: ignore[call-arg]
-    gc=False,
+    gc=False, #关闭python gc对这个类的跟踪，创建/销毁开销极低
 ):  # type: ignore[call-arg]
     request_id: str
-    new_token_ids: list[int]
+    new_token_ids: list[int] #本次新生成的token ids
 
     new_logprobs: LogprobsLists | None = None
     new_prompt_logprobs_tensors: LogprobsTensors | None = None
@@ -138,14 +138,16 @@ class EngineCoreOutput(
 
     trace_headers: Mapping[str, str] | None = None
     # The number of tokens with prefix cache hits.
-    num_cached_tokens: int = 0
+    num_cached_tokens: int = 0  #本次有多少token是从prefix cache命中的
 
     # The number of NaNs in logits.
     # A value greater than 0 indicates that the output is corrupted.
     num_nans_in_logits: int = 0
 
-    @property
+    @property #代表只读属性
     def finished(self) -> bool:
+        #只要 finish_reason 不为 None，就认为这个请求已经结束（LENGTH、STOP、ABORT 等）
+        #方便调用方判断"这个输出是不是最后一个"
         return self.finish_reason is not None
 
 
@@ -166,7 +168,12 @@ class EngineCoreOutputs(
     array_like=True,  # type: ignore[call-arg]
     omit_defaults=True,  # type: ignore[call-arg]
     gc=False,
-):  # type: ignore[call-arg]
+):
+    """
+    它并没有继承多个类，只继承了msgspec.Struct，后边的参数不是父类，而是传给元类的类构造参数
+    """
+
+    # type: ignore[call-arg]
     # NOTE(Nick): We could consider ways to make this more compact,
     # e.g. columnwise layout
 
@@ -182,12 +189,17 @@ class EngineCoreOutputs(
 
     # In DP case, used to signal that the current wave of requests
     # has finished and the engines are paused.
+    #同一批请求在 4 块 GPU（4 个 engine）上同步执行”，需要用 wave 机制做全局同步
     wave_complete: int | None = None
     # In DP case, used to signal that a request was received for an
     # "old" wave, so the next wave needs to be started in other engines.
     start_wave: int | None = None
 
     def __post_init__(self):
+        """
+        一个典型的 dataclass / msgspec.Struct 的后处理 钩子
+        可以把__post_init__理解成构造函数执行完之后，再自动补点默认逻辑
+        """
         if self.timestamp == 0.0:
             self.timestamp = time.monotonic()
 

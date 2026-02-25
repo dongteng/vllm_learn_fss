@@ -119,17 +119,30 @@ class PrefixCacheStats(BaseCacheStats):
     - `queries`: Refers to the number of tokens that were queried.
     """
 
-    preempted_requests: int = 0
+    preempted_requests: int = 0 #本次更新中，有多少个请求是"之前被抢占的请求"
     """The number of previously preempted requests in this update."""
 
-    preempted_queries: int = 0
+    preempted_queries: int = 0 #：所有被抢占过的请求，在本次更新中总共查询了多少个 token（尝试匹配前缀缓存）
     """The `queries` number for preempted requests."""
 
-    preempted_hits: int = 0
+    preempted_hits: int = 0 #所有被抢占过的请求，在本次更新中总共命中了多少个 token（成功从前缀缓存复用）
     """The `hits` number for preempted requests."""
 
     def record(self, num_tokens: int, num_hits: int, preempted: bool) -> None:
-        """Aggregate request information into the stats."""
+        """Aggregate request information into the stats.
+        每次有一个请求处理完前缀缓存匹配后，就调用这个方法来累加统计
+        num_tokens：这个请求查询了多少个 token（尝试匹配前缀）
+        num_hits：这个请求命中了多少个 token（成功复用缓存）
+        preempted：这个请求是不是之前被抢占过的（是 True / 否 False）
+        为什么分开统计？
+        因为在 vLLM 的调度器里：
+        新请求：通常从头 prefill，前缀缓存命中率较低
+        被抢占后恢复的请求：之前已经 prefill 过一部分，恢复时有大量 token 可以从 prefix cache 命中
+        如果混在一起统计，命中率会被“被抢占请求”拉高，看起来“缓存很强”，但实际上新请求的体验没改善
+        分开统计后，vLLM 可以更准确地评估：
+        新请求的前缀缓存效果（更能反映真实用户体验）
+        抢占机制对缓存命中的影响（评估调度策略好坏）
+        """
         if preempted:
             # Previously preempted request
             self.preempted_requests += 1
@@ -163,31 +176,35 @@ class KVCacheEvictionEvent:
 
 @dataclass
 class SchedulerStats:
-    """Stats associated with the scheduler."""
+    """Stats associated with the scheduler.
+    记录和统计vllm 调度器在当前时刻的各种运行状态和性能指标，主要用于内部监控、日志记录、负载均衡、调试、Prometheus 暴露指标等。
+    简单说就是，一个调度器快照或调度器状态报告，每一步调度循环结束时都会更新或生成这样一个对象，里面包含了当前有多少请求在跑、等候、KV cache 使用率、LoRA 适配器负载、推测解码统计等所有关键信息。
+    """
 
-    num_running_reqs: int = 0
-    num_waiting_reqs: int = 0
+    num_running_reqs: int = 0 #正在运行的请求数
+    num_waiting_reqs: int = 0 #在队列里的
 
     # These are used for internal DP load-balancing.
-    step_counter: int = 0
-    current_wave: int = 0
+    #用来判断调度器负载、是否需要扩容、是否卡住
+    step_counter: int = 0 #调度器执行的总步数
+    current_wave: int = 0 #当前“波次”（wave），用于数据并行（DP）负载均衡，vLLM 的 DP 模式下，多个 GPU 会分担请求，wave 用来同步“这一波请求都处理完了吗”
 
-    kv_cache_usage: float = 0.0
+    kv_cache_usage: float = 0.0 #前 KV cache 的使用率（0.0 ~ 1.0 或更高） 超过阈值时会触发 eviction（驱逐旧 cache）
 
-    prefix_cache_stats: PrefixCacheStats = field(default_factory=PrefixCacheStats)
-    connector_prefix_cache_stats: PrefixCacheStats | None = None
+    prefix_cache_stats: PrefixCacheStats = field(default_factory=PrefixCacheStats) #前缀缓存统计
+    connector_prefix_cache_stats: PrefixCacheStats | None = None #连接器（多节点/多 GPU）的前缀缓存统计（分布式场景用）
 
-    kv_cache_eviction_events: list[KVCacheEvictionEvent] = field(default_factory=list)
+    kv_cache_eviction_events: list[KVCacheEvictionEvent] = field(default_factory=list) #本次调度中发生的 KV cache 驱逐事件列表（哪些请求的哪些 block 被踢出）
 
-    spec_decoding_stats: SpecDecodingStats | None = None
-    kv_connector_stats: dict[str, Any] | None = None
+    spec_decoding_stats: SpecDecodingStats | None = None #推测解码（speculative decoding）的统计（draft 命中率、验证失败率、加速倍数等）推测解码（speculative decoding）的统计（draft 命中率、验证失败率、加速倍数等）
+    kv_connector_stats: dict[str, Any] | None = None #KV cache 连接器统计（多节点 KV transfer 的状态、延迟等）
 
-    waiting_lora_adapters: dict[str, int] = field(default_factory=dict)
-    running_lora_adapters: dict[str, int] = field(default_factory=dict)
+    waiting_lora_adapters: dict[str, int] = field(default_factory=dict) #等待加载的 LoRA 适配器（adapter name → 等待请求数）
+    running_lora_adapters: dict[str, int] = field(default_factory=dict) #正在运行的Lora适配器
 
-    cudagraph_stats: CUDAGraphStat | None = None
+    cudagraph_stats: CUDAGraphStat | None = None #CUDA Graph 的统计（捕获的 graph 数量、捕获时间、重放命中率等）
 
-    perf_stats: PerfStats | None = None
+    perf_stats: PerfStats | None = None #整体性能统计（TTFT、TPOT、调度延迟、GPU 利用率等汇总）
 
 
 @dataclass
