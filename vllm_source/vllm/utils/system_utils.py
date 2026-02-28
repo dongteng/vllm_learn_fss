@@ -179,7 +179,7 @@ def _add_prefix(file: TextIO, worker_name: str, pid: int) -> None:
         prefix = f"({worker_name} pid={pid}) "
     else:
         prefix = f"{CYAN}({worker_name} pid={pid}){RESET} "
-    file_write = file.write
+    file_write = file.write #保存原始write函数指针，这是极其关键的一步，以后我们会重写file.write
 
     def write_with_prefix(s: str):
         if not s:
@@ -203,8 +203,12 @@ def _add_prefix(file: TextIO, worker_name: str, pid: int) -> None:
 
 
 def decorate_logs(process_name: str | None = None) -> None:
-    """Decorate stdout/stderr with process name and PID prefix."""
-    #vLLM 项目中用于美化/区分多进程日志输出的一个实用工具函数，
+    """Decorate stdout/stderr with process name and PID prefix.
+    本质是在不改任何print/logging代码前提下，给所有 stdout / stderr 输出自动加上「进程名前缀 + PID + 颜色」，并且保证每一行都正确加前缀。**这在多进程推理（vLLM 场景）里极其重要，否则日志会混成一锅粥。
+    真正的魔法在 _add_prefix()，它通过 monkey patch 的方式，动态替换 file.write 方法，实现透明插入前缀。
+
+    """
+
 
     # Respect VLLM_CONFIGURE_LOGGING environment variable
     if not envs.VLLM_CONFIGURE_LOGGING:#如果用户设置环境变量 VLLM_CONFIGURE_LOGGING=0 或 False，就完全跳过这个装饰逻辑。方便有些人不想被加前缀，或者用自己的日志系统。

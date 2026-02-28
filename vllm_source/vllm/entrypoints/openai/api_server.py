@@ -141,17 +141,33 @@ async def lifespan(app: FastAPI):
         del app.state
 
 
-@asynccontextmanager
+@asynccontextmanager #装饰器使用者可以用 async with build_async_engine_client(...) as engine: 的写法，自动保证“用完就清理”。
 async def build_async_engine_client(
-    args: Namespace,
+    args: Namespace, #Namespace 指的就是 Python 标准库 argparse 里的 argparse.Namespace 类型。
     *,
     usage_context: UsageContext = UsageContext.OPENAI_API_SERVER,
     disable_frontend_multiprocessing: bool | None = None,
     client_config: dict[str, Any] | None = None,
 ) -> AsyncIterator[EngineClient]:
+    """
+    上下文管理器：构建并返回一个异步引擎客户端（EngineClient）
+    它负责管理引擎客户端的整个生命周期：
+    - 在进入上下文时创建并初始化引擎
+    - 在退出上下文时（正常结束或异常）自动关闭和清理引擎
+    """
+
+
+    #这一块是性能+稳定性优化，针对Linux多进程启动方式的特殊处理
+    #问题：如果直接用fork或spawn，每个 worker 进程启动时都要重新导入 vLLM 的所有模块（torch、transformers、vllm 本身等），非常慢 + 浪费内存。
+    #解决方案：用forkserver" 模式 + set_forkserver_preload
+    #先创建一个“fork server”守护进程
+    #在这个守护进程里提前导入所有重量级模块（这里预加载了 vllm.v1.engine.async_llm）
+    #以后创建 worker 时，直接从 forkserver fork 子进程 → 子进程继承已经导入好的模块 → 启动极快、内存开销小
     if os.getenv("VLLM_WORKER_MULTIPROC_METHOD") == "forkserver":
         # The executor is expected to be mp.
         # Pre-import heavy modules in the forkserver process
+        #当执行器预期使用multiprocesing时
+        #在forkserver进程中预先导入重量级模块
         logger.debug("Setup forkserver with pre-imports")
         multiprocessing.set_start_method("forkserver")
         multiprocessing.set_forkserver_preload(["vllm.v1.engine.async_llm"])
@@ -160,7 +176,9 @@ async def build_async_engine_client(
 
     # Context manager to handle engine_client lifecycle
     # Ensures everything is shutdown and cleaned up on error/exit
-    engine_args = AsyncEngineArgs.from_cli_args(args)
+    #上下文管理器，用于处理engine_client的生命周期
+    #确保出错或退出时所有资源都被正确关闭和清理
+    engine_args = AsyncEngineArgs.from_cli_args(args)  #把命令行参数 args 转成 AsyncEngineArgs 对象（这是引擎的核心配置类）
     if client_config:
         engine_args._api_process_count = client_config.get("client_count", 1)
         engine_args._api_process_rank = client_config.get("client_index", 0)
@@ -168,12 +186,7 @@ async def build_async_engine_client(
     if disable_frontend_multiprocessing is None:
         disable_frontend_multiprocessing = bool(args.disable_frontend_multiprocessing)
 
-    async with build_async_engine_client_from_engine_args(
-        engine_args,
-        usage_context=usage_context,
-        disable_frontend_multiprocessing=disable_frontend_multiprocessing,
-        client_config=client_config,
-    ) as engine:
+    async with build_async_engine_client_from_engine_args(engine_args,usage_context=usage_context,disable_frontend_multiprocessing=disable_frontend_multiprocessing,client_config=client_config,) as engine:
         yield engine
 
 
@@ -893,13 +906,16 @@ def build_app(args: Namespace) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=args.allowed_origins,
-        allow_credentials=args.allow_credentials,
+        allow_credentials=args.allow_credentials, #是否允许携带凭证（cookies、HTTP 认证、客户端证书等）。
         allow_methods=args.allowed_methods,
         allow_headers=args.allowed_headers,
     )
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_: Request, exc: HTTPException):
+        """
+        当任何路由抛出fastapi.HTTPException时，统一把错误转换成 OpenAI 风格的 JSON 错误响应格式，而不是 FastAPI 默认的错误格式。
+        """
         err = ErrorResponse(
             error=ErrorInfo(
                 message=exc.detail,
@@ -940,16 +956,58 @@ def build_app(args: Namespace) -> FastAPI:
         return JSONResponse(err.model_dump(), status_code=HTTPStatus.BAD_REQUEST)
 
     # Ensure --api-key option from CLI takes precedence over VLLM_API_KEY
+    #明确说明意图：命令行参数 --api-key 的优先级要高于环境变量 VLLM_API_KEY。
     if tokens := [key for key in (args.api_key or [envs.VLLM_API_KEY]) if key]:
+        """
+        这是一个带 walrus operator（:= 海象运算符） 的 if 语句，同时完成赋值和判断。
+        args.api_key：命令行传入的 --api-key 参数，通常是一个列表（支持多个 key，比如 --api-key sk-xxx --api-key sk-yyy）
+        如果用户没传 --api-key，args.api_key 是 None 或空列表
+        (args.api_key or [envs.VLLM_API_KEY])：
+        如果 args.api_key 有值（非空列表），就用它
+        如果没有，就 fallback 到 [envs.VLLM_API_KEY]（环境变量的值，可能是单个字符串或 None）
+        
+        [key for key in ... if key]：过滤掉空字符串、None 等无效值，只保留真正有内容的 key
+        tokens := ...：把最终过滤后的有效 key 列表赋值给 tokens，同时作为 if 的条件
+        优先级总结：
+        用户传了 --api-key sk-aaa sk-bbb → tokens = ["sk-aaa", "sk-bbb"]
+        没传 --api-key，但设了环境变量 VLLM_API_KEY=sk-ccc → tokens = ["sk-ccc"]
+        两者都没设 → tokens = [] → if 不成立，不加认证
+        """
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
 
     if args.enable_request_id_headers:
+        """
+        这个中间件通常会做三件事：
+        1）如果请求头中已经有 X-Request-ID，就直接沿用。
+        2）如果没有，就生成一个新的唯一 ID（比如 uuid）。
+        3）把这个 ID：
+        注入到 request 对象中，方便业务代码读取
+        写入 response header，返回给客户端
+        写入日志上下文，方便统一追踪
+        """
         app.add_middleware(XRequestIdMiddleware)
 
     # Add scaling middleware to check for scaling state
+    """
+    待看
+    给应用加一层“扩缩容状态检测中间件”，在处理请求前判断当前服务是否处于 scaling（扩容 / 缩容）状态，如果是，就采取特殊处理（通常是拒绝请求或返回友好提示），避免流量打到不稳定节点上。
+    这个中间件一般会做什么？典型逻辑是：
+    1）检查当前进程 / 容器是否处于 scaling 状态，比如：   
+    正在启动（warming up）  
+    正在下线（draining） 
+    正在扩容初始化
+    2）如果是，直接返回：
+    HTTP 503 Service Unavailable
+    或 429 Too Many Requests
+    并带上 Retry-After 头，提示客户端稍后重试
+    3）如果不是，放行请求，继续进入后续中间件和业务逻辑
+    """
     app.add_middleware(ScalingMiddleware)
 
     if envs.VLLM_DEBUG_LOG_API_SERVER_RESPONSE:
+        """
+        在调试模式下，给 API Server 加一个中间件，把每个 HTTP 响应的内容完整打进日志，用于排查问题，但因为可能泄露敏感数据，所以强烈不建议在生产环境打开。
+        """
         logger.warning(
             "CAUTION: Enabling log response in the API Server. "
             "This can include sensitive information and should be "
@@ -986,7 +1044,7 @@ def build_app(args: Namespace) -> FastAPI:
                 f"Invalid middleware {middleware}. Must be a function or a class."
             )
 
-    app = sagemaker_standards.bootstrap(app)
+    app = sagemaker_standards.bootstrap(app) #把你的 FastAPI / ASGI 应用 app 挂上 SageMaker 官方推荐的一些标准化中间件和配置，使它符合 SageMaker 推理服务的最佳实践
 
     return app
 
@@ -1023,6 +1081,7 @@ async def init_app_state(
         args.chat_template, engine_client, vllm_config.model_config
     )
 
+    #根据启动参数args.tool_server，动态决定是否启用 “工具调用系统（tool calling）”，以及使用哪种工具服务器实现
     if args.tool_server == "demo":
         tool_server: ToolServer | None = DemoToolServer()
         assert isinstance(tool_server, DemoToolServer)
@@ -1034,11 +1093,6 @@ async def init_app_state(
         tool_server = None
 
     # Merge default_mm_loras into the static lora_modules
-    default_mm_loras = (
-        vllm_config.lora_config.default_mm_loras
-        if vllm_config.lora_config is not None
-        else {}
-    )
 
     default_mm_loras = (
         vllm_config.lora_config.default_mm_loras
@@ -1073,25 +1127,31 @@ async def init_app_state(
         if "generate" in supported_tasks
         else None
     )
+
+    #chatgpt说会在@app.post("/v1/chat/completions")路由处会有：return await state.openai_serving_responses.create_chat_completion(...)
+    #这是响应的全部业务逻辑
+    #为啥用括号包裹啊？
     state.openai_serving_chat = (
-        OpenAIServingChat(
-            engine_client,
-            state.openai_serving_models,
-            args.response_role,
-            request_logger=request_logger,
-            chat_template=resolved_chat_template,
+        # 如果支持 "generate" 任务，才会创建这个服务对象
+        OpenAIServingChat(          # ← 创建 OpenAI 兼容的聊天服务实例
+            engine_client,          # 底层推理引擎客户端
+            state.openai_serving_models,  # 已加载的模型信息
+            args.response_role,         # 回答时默认使用的 role（通常是 "assistant"）
+            request_logger=request_logger,  # 请求日志记录器
+            chat_template=resolved_chat_template,  # 已解析好的聊天模板（jinja2 或类似）
             chat_template_content_format=args.chat_template_content_format,
-            trust_request_chat_template=args.trust_request_chat_template,
-            return_tokens_as_token_ids=args.return_tokens_as_token_ids,
-            enable_auto_tools=args.enable_auto_tool_choice,
-            exclude_tools_when_tool_choice_none=args.exclude_tools_when_tool_choice_none,
-            tool_parser=args.tool_call_parser,
-            reasoning_parser=args.structured_outputs_config.reasoning_parser,
-            enable_prompt_tokens_details=args.enable_prompt_tokens_details,
-            enable_force_include_usage=args.enable_force_include_usage,
-            enable_log_outputs=args.enable_log_outputs,
-            log_error_stack=args.log_error_stack,
+            trust_request_chat_template=args.trust_request_chat_template,  # 是否信任客户端传来的模板（安全相关）
+            return_tokens_as_token_ids=args.return_tokens_as_token_ids,  # 是否把 token 以 id 形式返回（调试用）
+            enable_auto_tools=args.enable_auto_tool_choice,  # 是否自动开启 tool calling
+            exclude_tools_when_tool_choice_none=...,  # 当 tool_choice="none" 时是否隐藏 tools
+            tool_parser=args.tool_call_parser,  # 工具调用结果的解析器
+            reasoning_parser=...,  # 结构化输出/推理标签解析器
+            enable_prompt_tokens_details=...,  # 是否返回详细的 prompt token 信息
+            enable_force_include_usage=...,  # 强制包含 usage 字段
+            enable_log_outputs=...,  # 是否记录模型输出
+            log_error_stack=...,  # 出错时是否记录完整堆栈
         )
+        # 关键条件判断：只有当支持 "generate" 任务时才创建，否则赋值为 None
         if "generate" in supported_tasks
         else None
     )
@@ -1252,6 +1312,17 @@ def create_server_unix_socket(path: str) -> socket.socket:
 
 
 def validate_api_server_args(args):
+    """
+    参数校验函数
+    检查用户传入的 两个和“工具调用/结构化输出”相关的参数是否合法，如果不合法就立刻抛异常，让程序停止启动，避免后面运行时才崩溃。
+    当你启动 vLLM 的 OpenAI 兼容 API 服务器时（比如 vllm serve 或 python -m vllm.entrypoints.openai.api_server），会传入一大堆参数（--enable-auto-tool-choice、--tool-call-parser 等）。
+    其中有两个参数和“模型如何处理工具调用（tool calling）/结构化输出（structured outputs）”有关：
+
+    --enable-auto-tool-choice + --tool-call-parser
+    --reasoning-parser（通常藏在 structured_outputs_config 里）
+
+    这段代码的任务就是：确认这两个配置选的值是 vLLM 目前真的支持的，否则直接报错。
+    """
     valid_tool_parses = ToolParserManager.list_registered()
     if args.enable_auto_tool_choice and args.tool_call_parser not in valid_tool_parses:
         raise KeyError(
@@ -1298,10 +1369,17 @@ def setup_server(args):
     set_ulimit()#把系统允许"同时打开的文件数量上限"调大
 
     def signal_handler(*_) -> None:
+        """
+        信号处理器函数：参数 *_ 表示忽略信号编号和栈帧（我们不关心具体是哪个信号或从哪来的）
+        什么都不做，直接raise
+        KeyboardInterrupt 是 Python 收到 Ctrl+C 时默认抛的异常
+        """
         # Interrupt server on sigterm while initializing
         raise KeyboardInterrupt("terminated")
-
-    signal.signal(signal.SIGTERM, signal_handler)
+    #SIGTERM 是 Linux/Unix 系统中的一种进程信号（signal），全称是 SIGnal TERMinate，信号编号为 15（常用 kill -15 或直接 kill 命令默认发送的就是它）。
+    #把 SIGTERM 信号绑定到上面这个 handler SIGTERM 是“温柔终止”信号（kill -15），生产环境最常用（Kubernetes pod 终止、systemd stop、重启等都会发这个）
+    #从这一行开始，只要进程收到 SIGTERM，就会执行 raise KeyboardInterrupt("terminated")
+    signal.signal(signal.SIGTERM, signal_handler) #在服务器初始化阶段（模型还没加载完、引擎还没准备好）如果收到 SIGTERM 信号，就立刻抛出 KeyboardInterrupt 异常，让整个进程快速退出，而不是继续卡住或半死不活。
 
     if args.uds:
         listen_address = f"unix:{args.uds}"
@@ -1339,14 +1417,12 @@ async def run_server_worker(
     if log_config is not None:
         uvicorn_kwargs["log_config"] = log_config
 
-    async with build_async_engine_client(
-        args,
-        client_config=client_config,
-    ) as engine_client: #整个服务的核心引擎初始化，可以理解为：启动 LLM 引擎进程 + 建立 RPC + 建立 GPU 通信 + 初始化调度器
+    async with build_async_engine_client(args,client_config=client_config,) as engine_client:
+        #整个服务的核心引擎初始化，可以理解为：启动 LLM 引擎进程 + 建立 RPC + 建立 GPU 通信 + 初始化调度器
         app = build_app(args)
 
         await init_app_state(engine_client, app.state, args) #初始化app运行状态
-
+        #%d → 占位符，表示整数  %s → 占位符，表示字符串
         logger.info(
             "Starting vLLM API server %d on %s",
             engine_client.vllm_config.parallel_config._api_process_rank,
@@ -1376,7 +1452,7 @@ async def run_server_worker(
 
     # NB: Await server shutdown only after the backend context is exited
     try:
-        await shutdown_task #卡在这里 让服务一直跑
+        await shutdown_task
     finally:
         sock.close()
 
@@ -1390,5 +1466,5 @@ if __name__ == "__main__":
     parser = make_arg_parser(parser)
     args = parser.parse_args() #里才是参数真正被解析并更新进 args 的时刻 ,parse_args()（无参数调用）会自动读取 sys.argv[1:]（即命令行里 --model ... 后面的所有部分）。
     validate_parsed_serve_args(args)
-
+    #
     uvloop.run(run_server(args))

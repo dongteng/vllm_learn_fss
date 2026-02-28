@@ -16,11 +16,14 @@
       <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/vllm_flash_attn/layers" />
       <excludeFolder url="file://$MODULE_DIR$/vllm_source/vllm/vllm_flash_attn/ops" />
     </content>
-    <orderEntry type="jdk" jdkName="Remote Python 3.10.19 (sftp://root@192.168.102.104:8034/root/miniconda3/envs/vllm/bin/python3)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.13" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">
     <option name="format" value="PLAIN" />
     <option name="myDocStringFormat" value="Plain" />
+  </component>
+  <component name="TestRunnerService">
+    <option name="PROJECT_TEST_RUNNER" value="py.test" />
   </component>
 </module>

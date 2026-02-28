@@ -21,6 +21,9 @@ router = APIRouter()
 
 
 def attach_router(app: FastAPI):
+    """
+    在 vLLM 的 OpenAI 兼容 API 服务器中，可选地注册两个动态 LoRA 适配器管理端点（/v1/load_lora_adapter 和 /v1/unload_lora_adapter），允许运行时（runtime）加载/卸载 LoRA 适配器。但这个功能只在开发/测试环境下推荐使用，生产环境默认关闭（因为有安全、稳定性、性能风险）。
+    """
     if not envs.VLLM_ALLOW_RUNTIME_LORA_UPDATING:
         """If LoRA dynamic loading & unloading is not enabled, do nothing."""
         return

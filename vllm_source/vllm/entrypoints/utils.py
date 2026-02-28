@@ -226,6 +226,9 @@ def get_max_tokens(
 
 
 def log_non_default_args(args: Namespace | EngineArgs):
+    """
+    用来记录用户在启动vLLM时真正修改过的参数，而不是把所有参数都打印出来
+    """
     non_default_args = {}
 
     # Handle Namespace

@@ -172,9 +172,19 @@ class OpenAIServingChat(OpenAIServing):
         This method triggers Jinja2 template compilation and content format
         detection that would otherwise happen on the first real request,
         causing increased latency on the first request.
+
+        这个函数的作用：在服务启动阶段提前“跑一遍最小聊天流程”，把所有昂贵的初始化工作提前完成，从而避免第一个用户请求变慢。
+        为什么“第一次请求会慢”？
+        你可以从工程直觉理解：
+        vLLM 在第一次真实聊天请求到来时，才会：
+        1）加载 tokenizer 2）编译 Jinja2 chat template 3）检测 chat template 内容格式 4）初始化 prompt 处理流水线
+
+        这些步骤：都是 只需做一次  但 耗时不小  如果全堆到第一个用户请求上：👉 第一个请求 = 特别慢（cold start）
+
+        这个函数的作用就是：👉 把 cold start 提前做掉
         """
         logger.info("Warming up chat template processing...")
-        start_time = time.perf_counter()
+        start_time = time.perf_counter() #系统提供的最高精度计时器，专门用于测量短时间间隔 ，单调递增， 不受系统时间修改影响，精度最高
 
         try:
             # Get the tokenizer from the engine
