@@ -464,35 +464,48 @@ class MPClient(EngineCoreClient):
     - 接收新的 EngineCoreRequest 请求
     - 返回 EngineCoreOutput 输出结果
 
-    MPClient 的主要职责：
-    - 通过 input_socket 向 EngineCore 推送 EngineCoreRequest
-    - 通过 output_socket 从 EngineCore 拉取 EngineCoreOutput
 
-    派生类：
-    - AsyncMPClient：专为异步接口 AsyncLLM 设计的子类
-    - SyncMPClient：专为同步接口 LLM 设计的子类
+    MPClient 是 vLLM 多进程推理架构中「客户端」的基础类
+    它负责：
+    1. 把请求   → 通过 ZMQ PUSH/ROUTER 发给多个后端 EngineCore 进程
+    2. 从后端   ← 通过 ZMQ PULL 接收推理结果
+    3. 管理序列化/反序列化（msgpack）
+    4. 处理数据并行（data parallel）时的 rank 分配与路由
+    5. 等待所有 EngineCore 启动并发送 "我准备好了" 信号
+
+    它有两个主要子类：
+    SyncMPClient → 给同步接口 LLM 使用（最常见）
+    AsyncMPClient → 给异步接口 AsyncLLM 使用
     """
 
     def __init__(
         self,
-        asyncio_mode: bool,
+        asyncio_mode: bool, #决定是用同步zmq还是异步
         vllm_config: VllmConfig,
-        executor_class: type[Executor],
-        log_stats: bool,
-        client_addresses: dict[str, str] | None = None,
+        executor_class: type[Executor], #真正推理的类
+        log_stats: bool, #是否输出统计讯息
+        client_addresses: dict[str, str] | None = None, #如果不为None,说明引擎是外部启动的，客户端只负责链接，否则客户端自己负责启动引擎进程
     ):
+        """
+        init 构造函数的干的事可以分为5步：初始化编码->初始化通信->启动、连接引擎->建立ZMQ socket->等待引擎就绪->构建并行股那里架构
+
+        """
         self.vllm_config = vllm_config
-        # Serialization setup.
-        self.encoder = MsgpackEncoder()
-        self.decoder = MsgpackDecoder(EngineCoreOutputs)
+        # Serialization setup. #可以理解为：把 Python 对象 ↔ bytes 做高效转换，用于 socket 发送。
+        self.encoder = MsgpackEncoder() #用msgpack做序列化（不是pickle 不是json）因为速度快体积小、支持克尽职数据
+        self.decoder = MsgpackDecoder(EngineCoreOutputs) #这个写法奇怪 是因为初始化的时候需要传一个目标模型
 
         # ZMQ setup.
-        sync_ctx = zmq.Context(io_threads=2)
-        self.ctx = zmq.asyncio.Context(sync_ctx) if asyncio_mode else sync_ctx
+        sync_ctx = zmq.Context(io_threads=2)   #创建zmq的上下文， io_threads=2：给 zmq 分配两个 IO 线程（处理网络/序列化）
+        self.ctx = zmq.asyncio.Context(sync_ctx) if asyncio_mode else sync_ctx #果是异步模式（asyncio_mode=True），用 zmq.asyncio.Context 包装一下
 
         # This will ensure resources created so far are closed
         # when the client is garbage collected, even if an
         # exception is raised mid-construction.
+        #非常重要的资源保护机制
+        # 用 weakref.finalize 注册析构回调
+        # 即使 __init__ 中途抛异常，也尽量把 zmq context、socket 等清理掉
+        # 防止出现 “zmq 资源泄漏 → 端口被占用 → 无法重启” 的常见问题
         self.resources = BackgroundResources(ctx=sync_ctx)
         self._finalizer = weakref.finalize(self, self.resources)
         success = False
@@ -501,50 +514,72 @@ class MPClient(EngineCoreClient):
             self.engines_running = False
 
             self.stats_update_address: str | None = None
-            if client_addresses:
+            if client_addresses: #引擎是外部启动的（比如在 Kubernetes、Ray、自己写的 manager 里启动）
                 # Engines are managed externally to this client.
                 input_address = client_addresses["input_address"]
                 output_address = client_addresses["output_address"]
                 self.stats_update_address = client_addresses.get("stats_update_address")
-            else:
+            else:#客户端自己负责启动引擎
                 # Engines are managed by this client.
+                #读取配置 → 计算并行规模 → fork 多个进程 → 初始化 GPU → 启动 EngineCore →建立 ZMQ 通信拓扑 → 返回所有通信地址
                 with launch_core_engines(vllm_config, executor_class, log_stats) as (
-                    engine_manager,
-                    coordinator,
-                    addresses,
+                    engine_manager, #进程管理器，持有所有EngineCore 进程句柄，负责 kill / join / terminate，监控异常推出，清理GPU资源
+                    coordinator,#全局协调器进程，负责统计信息收集，吞吐、延迟统计，统一状态发布，有时也参与调度
+                    addresses,#一个 通信地址集合对象，里面包含：inputs：前端 → EngineCore 的 ZMQ 地址，outputs：EngineCore → 前端 的 ZMQ 地址，stats publish 地址
                 ):
+                    """
+                    把这两个对象保存到 self.resources 里，主要目的有二：
+
+                    在 MPClient 对象被销毁时能正确清理
+                    （因为前面用 weakref.finalize(self, self.resources) 注册了析构回调）
+                    方便后续代码访问
+                    比如想手动 kill 掉所有 engine、查看进程状态、获取 coordinator 的统计端口等
+                    """
                     self.resources.coordinator = coordinator
                     self.resources.engine_manager = engine_manager
 
                 (input_address,) = addresses.inputs
                 (output_address,) = addresses.outputs
+
+                #统计数据发布socket地址,用于：wandb,prometheus,logging ,性能监控
                 self.stats_update_address = addresses.frontend_stats_publish_address
                 if coordinator is not None:
+                    # 确保：coordinator 里注册的统计端口 = addresses 给的统计端口
                     assert self.stats_update_address == (
                         coordinator.get_stats_publish_address()
                     )
 
             # Create input and output sockets.
+            #创建 前端 → 后端 的 ZMQ socket，类型：ROUTER，
+            #bind=True 表示：MPClient 是 服务端，EngineCore 主动 connect 过来。
+            #是 Python 的链式赋值写法，不是比较运算符。意思是把同一个值同时赋给两个变量
             self.input_socket = self.resources.input_socket = make_zmq_socket(
                 self.ctx, input_address, zmq.ROUTER, bind=True
             )
+            #创建后端->前端的ZMQ socket  类型pull， 用于拉取推理结果，多个 EngineCore 往同一个 socket 推结果
+            # EngineCore0 → \
+            # EngineCore1 →  PULL → client
+            # EngineCore2 → /
             self.resources.output_socket = make_zmq_socket(
                 self.ctx, output_address, zmq.PULL
             )
 
             parallel_config = vllm_config.parallel_config
             dp_size = parallel_config.data_parallel_size
-            dp_rank = parallel_config.data_parallel_rank
+            dp_rank = parallel_config.data_parallel_rank #当前进程的 rank
             dp_local_size = parallel_config.data_parallel_size_local
             offline_mode = parallel_config.data_parallel_rank_local is not None
             # Client manages local+remote EngineCores in pure internal LB case.
             # Client manages local EngineCores in hybrid and external LB case.
+            #是否之管理本地GPU?
             local_engines_only = (
                 parallel_config.data_parallel_hybrid_lb
                 or parallel_config.data_parallel_external_lb
             )
 
+            #计算要管理的 EngineCore 数量
             num_ranks = dp_local_size if local_engines_only else dp_size
+            # 计算我负责哪些GPU rank
             self.engine_ranks_managed = (
                 [dp_rank] if offline_mode else list(range(dp_rank, dp_rank + num_ranks))
             )
@@ -553,14 +588,19 @@ class MPClient(EngineCoreClient):
             )
 
             # ZMQ identity of each engine that this client will talk to.
+            #构造ZMQ identity（通信核心）
+            #如将[0,1,2,3,4,5,6,7] 转成 [ b'\x00\x00', b'\x01\x00', b'\x02\x00', ... , b'\x07\x00'
+            #这些事ZMQ ROUTER的路由地址
             self.core_engines: list[EngineIdentity] = [
                 rank.to_bytes(2, "little") for rank in self.engine_ranks_managed
             ]
 
             # Wait for ready messages from each engine on the input socket.
-            identities = set(self.core_engines)
+            #等待所有EngineCore启动完成 （分布式 barrier）
+            identities = set(self.core_engines) #此时{GPU0, GPU1, ..., GPU7}
             sync_input_socket = zmq.Socket.shadow(self.input_socket)
             while identities:
+                #开始等待所有EngineCore给我发 "我准备好了"
                 if not sync_input_socket.poll(
                     timeout=VLLM_ENGINE_READY_TIMEOUT_S * 1000  # convert to ms
                 ):
@@ -571,15 +611,19 @@ class MPClient(EngineCoreClient):
                 identity, _ = sync_input_socket.recv_multipart()
                 identities.remove(identity)
 
-            self.core_engine: EngineIdentity = self.core_engines[0]
-            self.utility_results: dict[int, AnyFuture] = {}
+            self.core_engine: EngineIdentity = self.core_engines[0] #GPU0 作为默认路由
+            self.utility_results: dict[int, AnyFuture] = {}#初始化工具请求 future 表
 
             # Request objects which may contain pytorch-allocated tensors
             # that we need to keep references to until zmq is done with the
             # underlying data.
+            #高性能通信的关键细节 ：请求对象，可能包含 pytorch 分配的 tensor，需要保持引用，直到 zmq 处理完底层数据
+            #ZMQ 发送 PyTorch tensor 是零拷贝，如果 Python 对象被 GC：tensor 内存释放，ZMQ 仍在用 → 直接崩溃
+            #所以把还没发送完成的 tensor 引用缓存起来，确保
             self.pending_messages = deque[tuple[zmq.MessageTracker, Any]]()
 
             # Start monitoring engine core processes for unexpected failures
+            #启动引擎线程机制
             self.start_engine_core_monitor()
 
             success = True
@@ -620,11 +664,11 @@ class MPClient(EngineCoreClient):
             or not hasattr(engine_manager, "processes")
             or not engine_manager.processes
         ):
-            # No engine processes to monitor
+            # No engine processes to monitor 避免空监控
             return
 
         engine_processes = engine_manager.processes
-        self_ref = weakref.ref(self)
+        self_ref = weakref.ref(self) #弱引用MPClient
 
         # Monitor engine core process liveness. If any die unexpectedly,
         # logs an error, shuts down the client and invokes the failure
@@ -632,8 +676,8 @@ class MPClient(EngineCoreClient):
         def monitor_engine_cores():
             sentinels = [proc.sentinel for proc in engine_processes]
             died = multiprocessing.connection.wait(sentinels)
-            _self = self_ref()
-            if not _self or _self.resources.engine_dead:
+            _self = self_ref() #
+            if not _self or _self.resources.engine_dead: #如果 _self 不存在或 engine 已经标记死掉，直接返回。
                 return
             _self.resources.engine_dead = True
             proc_name = next(
@@ -647,7 +691,8 @@ class MPClient(EngineCoreClient):
             # Note: For MPClient, we don't have a failure callback mechanism
             # like MultiprocExecutor, but we set engine_dead flag which will
             # cause subsequent operations to raise EngineDeadError
-
+        #daemon=True: 程序退出时，线程自动退出
+        #name="MPClientEngineMonitor"是起了名字
         Thread(
             target=monitor_engine_cores, daemon=True, name="MPClientEngineMonitor"
         ).start()

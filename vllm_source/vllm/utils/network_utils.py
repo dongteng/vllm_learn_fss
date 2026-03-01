@@ -265,10 +265,12 @@ def make_zmq_socket(
 ) -> zmq.Socket | zmq.asyncio.Socket:  # type: ignore[name-defined]
     """Make a ZMQ socket with the proper bind/connect semantics."""
 
-    mem = psutil.virtual_memory()
-    socket = ctx.socket(socket_type)
+    mem = psutil.virtual_memory() #获取系统总内存和可用内存
+    socket = ctx.socket(socket_type) #创建一个指定类型的ZMQ socket。
 
     # Calculate buffer size based on system memory
+    #动态设置缓冲区大小
+    #如果系统内存 >32GB 且可用 >16GB → 给 socket 分配 0.5GB 缓冲，提高吞吐量内存小 → 使用系统默认（-1），避免占用太多
     total_mem = mem.total / 1024**3
     available_mem = mem.available / 1024**3
     # For systems with substantial memory (>32GB total, >16GB available):
@@ -277,21 +279,21 @@ def make_zmq_socket(
     # - Use system default (-1) to avoid excessive memory consumption
     buf_size = int(0.5 * 1024**3) if total_mem > 32 and available_mem > 16 else -1
 
-    if bind is None:
+    if bind is None: #决定socket是bind还是connect  ROUTER → bind（MPClient）,   DEALER → connect（EngineCore）
         bind = socket_type not in (zmq.PUSH, zmq.SUB, zmq.XSUB)
 
     if socket_type in (zmq.PULL, zmq.DEALER, zmq.ROUTER):
-        socket.setsockopt(zmq.RCVHWM, 0)
+        socket.setsockopt(zmq.RCVHWM, 0) #收消息缓冲设置，HWM=0表示无限队列，即MPClient ROUTER 可以接收多个 EngineCore 消息而不丢
         socket.setsockopt(zmq.RCVBUF, buf_size)
 
     if socket_type in (zmq.PUSH, zmq.DEALER, zmq.ROUTER):
-        socket.setsockopt(zmq.SNDHWM, 0)
+        socket.setsockopt(zmq.SNDHWM, 0) #发消息缓冲设置
         socket.setsockopt(zmq.SNDBUF, buf_size)
 
-    if identity is not None:
+    if identity is not None: #EngineCore 给自己一个唯一 ID，这样 ROUTER 能区分哪个 EngineCore 发来的消息
         socket.setsockopt(zmq.IDENTITY, identity)
 
-    if linger is not None:
+    if linger is not None: #关闭 socket 时的缓冲处理时间，防止消息丢失
         socket.setsockopt(zmq.LINGER, linger)
 
     if socket_type == zmq.XPUB:
@@ -300,13 +302,16 @@ def make_zmq_socket(
     # Determine if the path is a TCP socket with an IPv6 address.
     # Enable IPv6 on the zmq socket if so.
     scheme, host, _ = split_zmq_path(path)
-    if scheme == "tcp" and is_valid_ipv6_address(host):
+    if scheme == "tcp" and is_valid_ipv6_address(host): #如果地址是 IPv6 → 打开 socket IPv6 支持
         socket.setsockopt(zmq.IPV6, 1)
 
+    #最终建立连接
+    # 例子：MPClient ROUTER → bind "tcp://127.0.0.1:5555"
+    # EngineCore DEALER → connect "tcp://127.0.0.1:5555"
     if bind:
-        socket.bind(path)
+        socket.bind(path)  #bind->监听端口（服务器模式）
     else:
-        socket.connect(path)
+        socket.connect(path)#connect->连接端口（客户端模式）
 
     return socket
 

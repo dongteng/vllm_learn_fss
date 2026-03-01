@@ -768,7 +768,10 @@ def launch_core_engines(
         EngineZmqAddresses,
     ]
 ]:
-    """Launch engine and DP coordinator processes as needed."""
+    """Launch engine and DP coordinator processes as needed.
+    根据vllm_config的并行配置，启动若干个EngineCore推理过程++ 可选的 DP 协调器，并建立 ZMQ 通信地址，最后把这些资源交给 MPClient 使用。
+
+    """
 
     parallel_config = vllm_config.parallel_config
     dp_size = parallel_config.data_parallel_size
