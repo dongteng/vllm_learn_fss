@@ -33,14 +33,16 @@ FailureCallback = Callable[[], None]
 
 
 class Executor(ABC):
-    """Abstract base class for vLLM executors."
+    """Abstract base class for vLLM executors. #vLLM执行器的抽象基类
 
     An executor is responsible for executing the model on one device,
     or it can be a distributed executor that can execute the model on multiple devices.
+    执行器负责在单个设备上运行模型，或者它也可以是分布式执行器，
+    能够在多个设备上执行模型。
     """
 
-    uses_ray: bool = False  # whether the executor uses Ray for orchestration.
-    supports_pp: bool = False  # whether the executor supports PP
+    uses_ray: bool = False  # whether the executor uses Ray for orchestration. 指示该执行器是否使用 Ray 来进行任务调度。
+    supports_pp: bool = False  # whether the executor supports PP 指示该执行器是否支持流水线并行（Pipeline Parallel）。
 
     @staticmethod
     def get_class(vllm_config: VllmConfig) -> type["Executor"]:
@@ -65,7 +67,6 @@ class Executor(ABC):
             executor_class = MultiprocExecutor
         elif distributed_executor_backend == "uni":
             from vllm.v1.executor.uniproc_executor import UniProcExecutor
-
             executor_class = UniProcExecutor
         elif distributed_executor_backend == "external_launcher":
             # TODO: make v1 scheduling deterministic
@@ -163,7 +164,7 @@ class Executor(ABC):
         """
         pass
 
-    @overload
+    @overload #只是类型标注，告诉静态类型检查器“不同参数组合返回不同类型
     def collective_rpc(
         self,
         method: str | Callable[[WorkerBase], _R],

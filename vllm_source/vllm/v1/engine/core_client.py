@@ -565,13 +565,27 @@ class MPClient(EngineCoreClient):
             )
 
             parallel_config = vllm_config.parallel_config
-            dp_size = parallel_config.data_parallel_size
+            dp_size = parallel_config.data_parallel_size #数据并行卡数
             dp_rank = parallel_config.data_parallel_rank #当前进程的 rank
-            dp_local_size = parallel_config.data_parallel_size_local
-            offline_mode = parallel_config.data_parallel_rank_local is not None
+            dp_local_size = parallel_config.data_parallel_size_local #当前机器上有多少个数据并行进程
+            offline_mode = parallel_config.data_parallel_rank_local is not None #判断当前进程是不是 不在数据并行环境里运行
             # Client manages local+remote EngineCores in pure internal LB case.
             # Client manages local EngineCores in hybrid and external LB case.
-            #是否之管理本地GPU?
+            """
+            先理解三种负载均衡（LB,load balancing）场景
+            第一种：纯 internal LB（内部负载均衡）
+            意思是所有 EngineCore 都在同一个系统内部，由 Client 自己决定把请求分给哪个后厨。
+            比如你有本地 4 个 EngineCore，再加远程机器上的 4 个 EngineCore，Client 统一管理这 8 个后厨，自己做调度。
+            这时候 Client 既管理 local，也管理 remote。
+            
+            第二种：hybrid LB（混合负载均衡）
+            混合的意思是：一部分负载是自己管，一部分是交给外部系统（比如 Ray、K8s 或者某个 gateway）做调度。
+            这时候 Client 只需要管理本地 EngineCore，远程的部分由外部调度器负责。
+            
+            第三种：external LB（外部负载均衡）
+            完全由外部系统分发请求。
+            Client 不再负责远程 EngineCore 的调度，只处理自己机器上的本地 EngineCore。
+            """
             local_engines_only = (
                 parallel_config.data_parallel_hybrid_lb
                 or parallel_config.data_parallel_external_lb
@@ -590,13 +604,13 @@ class MPClient(EngineCoreClient):
             # ZMQ identity of each engine that this client will talk to.
             #构造ZMQ identity（通信核心）
             #如将[0,1,2,3,4,5,6,7] 转成 [ b'\x00\x00', b'\x01\x00', b'\x02\x00', ... , b'\x07\x00'
-            #这些事ZMQ ROUTER的路由地址
+            #就是把管理的GPU rank列表，转换成固定长度的二进制ID列表。
+            #为啥要转成bytes?是因为在分布式系统里，很多通信协议（socket\rpc\ZeroMQ）都要求用字节流传输数据。
             self.core_engines: list[EngineIdentity] = [
                 rank.to_bytes(2, "little") for rank in self.engine_ranks_managed
             ]
 
             # Wait for ready messages from each engine on the input socket.
-            #等待所有EngineCore启动完成 （分布式 barrier）
             identities = set(self.core_engines) #此时{GPU0, GPU1, ..., GPU7}
             sync_input_socket = zmq.Socket.shadow(self.input_socket)
             while identities:
@@ -619,7 +633,8 @@ class MPClient(EngineCoreClient):
             # underlying data.
             #高性能通信的关键细节 ：请求对象，可能包含 pytorch 分配的 tensor，需要保持引用，直到 zmq 处理完底层数据
             #ZMQ 发送 PyTorch tensor 是零拷贝，如果 Python 对象被 GC：tensor 内存释放，ZMQ 仍在用 → 直接崩溃
-            #所以把还没发送完成的 tensor 引用缓存起来，确保
+            #所以把还没发送完成的 tensor 引用缓存起来，
+            #通过让 Python 看到“还有人（pending_messages）在用这个 tensor”，来阻止垃圾回收器把它删掉。
             self.pending_messages = deque[tuple[zmq.MessageTracker, Any]]()
 
             # Start monitoring engine core processes for unexpected failures

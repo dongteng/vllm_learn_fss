@@ -24,31 +24,39 @@ logger = init_logger(__name__)
 
 
 class UniProcExecutor(Executor):
+    #负责 单进程、 单GPU执行模型
     def _init_executor(self) -> None:
         """Initialize the worker and load the model."""
+        #driver_worker 是真正干活的对象（封装了模型、设备和推理逻辑）。rpc_rank=0：单进程模式下 rank 固定为 0。
         self.driver_worker = WorkerWrapperBase(vllm_config=self.vllm_config, rpc_rank=0)
+        #获取分布式参数
         distributed_init_method, rank, local_rank = self._distributed_args()
+        #构造worker初始化参数
         kwargs = dict(
             vllm_config=self.vllm_config,
             local_rank=local_rank,
             rank=rank,
             distributed_init_method=distributed_init_method,
             is_driver_worker=True,
-            shared_worker_lock=Lock(),
+            shared_worker_lock=Lock(), #一个共享锁（单线程安全）
         )
 
         self.async_output_thread: ThreadPoolExecutor | None = None
-        if self.max_concurrent_batches > 1:
+        if self.max_concurrent_batches > 1: #
             self.async_output_thread = ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="WorkerAsyncOutput"
             )
 
-        self.driver_worker.init_worker(all_kwargs=[kwargs])
-        self.driver_worker.init_device()
-        self.driver_worker.load_model()
+        self.driver_worker.init_worker(all_kwargs=[kwargs]) #初始化进程/线程环境、设置分布式后端（单机就是假的torch.distributed）
+        self.driver_worker.init_device() #设置 cuda device、创建 stream、检查显存等
+        self.driver_worker.load_model() #真正加载模型权重、分片、量化、移动到GPU
 
     def _distributed_args(self) -> tuple[str, int, int]:
-        """Return (distributed_init_method, rank, local_rank)."""
+        """Return (distributed_init_method, rank, local_rank).
+        get_ip() → 获取当前机器 IP，比如 "192.168.1.10"
+        get_open_port() → 随机找到一个空闲端口，比如 29500
+        get_distributed_init_method(ip, port) → 返回一个字符串，告诉分布式框架初始化方法，类似 "tcp://192.168.1.10:29500"
+        """
         distributed_init_method = get_distributed_init_method(get_ip(), get_open_port())
         # set local rank as the device index if specified
         device_info = self.vllm_config.device_config.device.__str__().split(":")
@@ -65,18 +73,21 @@ class UniProcExecutor(Executor):
         timeout: float | None = None,
         args: tuple = (),
         kwargs: dict | None = None,
-        non_block: bool = False,
-        single_value: bool = False,
+        non_block: bool = False, #False为阻塞调用，True为非阻塞（异步）
+        single_value: bool = False, #如果只有一个返回值，就直接返回，否则返回列表
     ) -> Any:
         if kwargs is None:
             kwargs = {}
 
-        if not non_block:
+        if not non_block: #如果是同步调用
             result = run_method(self.driver_worker, method, args, kwargs)
             return result if single_value else [result]
 
         try:
             result = run_method(self.driver_worker, method, args, kwargs)
+            #这里 result 有两种情况：
+            # 普通值（比如张量、数字）
+            # AsyncModelRunnerOutput → 异步输出对象，需要通过 get_output() 获取真正结果
             if isinstance(result, AsyncModelRunnerOutput):
                 if (async_thread := self.async_output_thread) is not None:
                     if single_value:
@@ -87,8 +98,8 @@ class UniProcExecutor(Executor):
 
                     return async_thread.submit(get_output_list)
                 result = result.get_output()
-            future = Future[Any]()
-            future.set_result(result if single_value else [result])
+            future = Future[Any]() ## 创建一个 Future 对象
+            future.set_result(result if single_value else [result]) # # 直接把结果塞进去
         except Exception as e:
             future = Future[Any]()
             future.set_exception(e)

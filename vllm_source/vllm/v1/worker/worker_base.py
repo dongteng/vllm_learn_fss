@@ -174,6 +174,9 @@ class WorkerWrapperBase:
     We first instantiate the WorkerWrapper, which remembers the worker module
     and class name. Then, when we call `update_environment_variables`, and the
     real initialization happens in `init_worker`.
+    这个类表示执行器/引擎中的 一个进程。它负责延迟初始化 worker 并管理 worker 的生命周期。
+    我们首先创建 WorkerWrapper 实例，它会记住 worker 模块和类名。
+    然后，当调用 update_environment_variables 时，会设置环境变量，真正的初始化工作在 init_worker 方法中完成。
     """
 
     def __init__(
@@ -191,9 +194,14 @@ class WorkerWrapperBase:
         users can launch 2 engines/executors, each with only 1 worker.
         All workers have rpc_rank=0, but they have different ranks in the TP
         group.
+        使用给定的 vllm_config 和 rpc_rank 初始化 worker wrapper。
+        注意：rpc_rank 表示 worker 在 executor 中的编号（rank）。在大多数情况下，它也等于 worker 在分布式组中的编号。但是，当多个 executor 协同工作时，这两个编号可能不同。
+
+        例如，在 SPMD 风格的离线推理（TP=2） 场景下，用户可以启动 2 个引擎/执行器，每个执行器只有 1 个 worker。
+        所有 worker 的 rpc_rank=0，但它们在 TP（张量并行）组中的 rank 是不同的。
         """
         self.rpc_rank = rpc_rank
-        self.global_rank = self.rpc_rank if global_rank is None else global_rank
+        self.global_rank = self.rpc_rank if global_rank is None else global_rank #worker 在整个分布式组中的编号，如果没有传就用 rpc_rank
         self.worker: WorkerBase | None = None
 
         # do not store this `vllm_config`, `init_worker` will set the final
@@ -245,13 +253,15 @@ class WorkerWrapperBase:
         assert self.vllm_config is not None, (
             "vllm_config is required to initialize the worker"
         )
-        self.vllm_config.enable_trace_function_call_for_thread()
+        self.vllm_config.enable_trace_function_call_for_thread() #开启线程级函数调用 trace。可以理解为：给当前 worker 打开调试/跟踪能力，方便记录调用链。这通常用于 profiling 或调试。
 
         from vllm.plugins import load_general_plugins
 
-        load_general_plugins()
+        load_general_plugins() #加载通用插件 这些插件可能是：自定义采样、自定义调度、日志增强、量化支持... 等用户可能想插入的东西
 
         if isinstance(self.vllm_config.parallel_config.worker_cls, str):
+            #检查配置里指定的 worker 类是不是字符串（比如 "vllm.worker.Worker" 这种写法）
+            #如果是字符串->通过字符串找到真正的类（动态导入）
             worker_class = resolve_obj_by_qualname(
                 self.vllm_config.parallel_config.worker_cls
             )
@@ -260,6 +270,7 @@ class WorkerWrapperBase:
                 "passing worker_cls is no longer supported. Please pass keep the class in a separate module and pass the qualified name of the class as a string."  # noqa: E501
             )
         if self.vllm_config.parallel_config.worker_extension_cls:
+            #如果配置里还额外指定了一个扩展类（worker_extension_cls）
             worker_extension_cls = resolve_obj_by_qualname(
                 self.vllm_config.parallel_config.worker_extension_cls
             )
@@ -277,6 +288,7 @@ class WorkerWrapperBase:
                     if callable(getattr(worker_extension_cls, attr)):
                         extended_calls.append(attr)
                 # dynamically inherit the worker extension class
+                #动态给原始类添加一个父类（多继承）当于让原来的 Worker 类动态继承了扩展类
                 worker_class.__bases__ = worker_class.__bases__ + (
                     worker_extension_cls,
                 )
@@ -331,6 +343,11 @@ class WorkerWrapperBase:
             # if a method is defined in this class, it will be called directly.
             # otherwise, since we define `__getattr__` and redirect attribute
             # query to `self.worker`, the method will be called on the worker.
+            ## 方法解析顺序：
+            # 如果这个方法在当前类中定义了，就直接调用。否则，因为我们实现了 __getattr__，
+            # 并且把属性查询重定向到了 self.worker，那么这个方法就会在 worker 上执行。
+            #举例，假设method ="generate",args=("hello",) ,  实际执行就类似self.generate("hello")，如果self没有generate方法，那么就self.worker.generate("hello")
+            #这是通过__getattr__自动转发实现的
             return run_method(self, method, args, kwargs)
         except Exception as e:
             # if the driver worker also execute methods,
