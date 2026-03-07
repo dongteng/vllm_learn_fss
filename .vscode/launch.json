@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug vLLM OpenAI Server",
+            "type": "python",
+            "request": "launch",
+            "module": "vllm.entrypoints.openai.api_server",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "python": "/root/miniconda3/envs/vllm/bin/python",
+            "args": [
+                "--model", "/data/nas/zhjm/model_cache/docker-shared/Qwen3-1.7B",
+                "--dtype", "float16",
+                "--max-model-len", "4096",
+                "--disable_frontend_multiprocessing","True",
+                "--gpu-memory-utilization", "0.6",
+                "--max-num-batched-tokens", "8192",
+                "--max-num-seqs", "256",
+                "--port", "13311"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "4",
+                "HTTP_PROXY": "",
+                "HTTPS_PROXY": "",
+                "NO_PROXY": "*"
+            }
+        }
+    ]
+}
