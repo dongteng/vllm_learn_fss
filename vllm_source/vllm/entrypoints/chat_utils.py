@@ -621,7 +621,7 @@ def resolve_chat_template_content_format(
     tokenizer: TokenizerLike | None,
     *,
     model_config: ModelConfig,
-) -> _ChatTemplateContentFormat:
+) -> _ChatTemplateContentFormat: #自动判断聊天模板（chat template）里 message 的 content 应该用什么格式解析。
     if given_format != "auto":
         return given_format
 

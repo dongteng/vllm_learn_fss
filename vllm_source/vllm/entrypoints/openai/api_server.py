@@ -264,7 +264,7 @@ def messages(request: Request) -> AnthropicServingMessages:
 
 
 def chat(request: Request) -> OpenAIServingChat | None:
-    return request.app.state.openai_serving_chat
+    return request.app.state.openai_serving_chat #从服务器状态里拿到一个已经初始化好的 Chat 服务对象
 
 
 def completion(request: Request) -> OpenAIServingCompletion | None:
@@ -487,17 +487,17 @@ async def create_messages(request: AnthropicMessagesRequest, raw_request: Reques
 
 
 @router.post(
-    "/v1/chat/completions",
-    dependencies=[Depends(validate_json_request)],
-    responses={
+    "/v1/chat/completions", #1
+    dependencies=[Depends(validate_json_request)],#钩子，在进入正式逻辑前，程序先运行valid_json_request来检查你发送的json格式是否违法
+    responses={ #声明可能返回的HTTP状态码和格式，reposeponses是FastAPI的内置功能，用于声明API可能返回的HTTP状态码和响应格式。
         HTTPStatus.OK.value: {"content": {"text/event-stream": {}}},
         HTTPStatus.BAD_REQUEST.value: {"model": ErrorResponse},
         HTTPStatus.NOT_FOUND.value: {"model": ErrorResponse},
         HTTPStatus.INTERNAL_SERVER_ERROR.value: {"model": ErrorResponse},
     },
 )
-@with_cancellation
-@load_aware_call
+@with_cancellation #如果客户端 断开连接，就立刻取消正在执行的逻辑。也就是说当用户（浏览器 客户端）中途关闭页面、刷新、切换路由、断网导致http断开，服务器端的这个接口处理逻辑应该尽快被取消
+@load_aware_call #一个计数器逻辑 可以先不看。运维或者监控系统可以看到当前有多少请求正在处理；可以限流；可以触发弹性伸缩在多节点部署或分布式推理场景下，可以根据活跃请求数动态调度请求到负载低的节点；可以用于生成访问量、请求峰值、平均并发数等报表。
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
     metrics_header_format = raw_request.headers.get(
         ENDPOINT_LOAD_METRICS_FORMAT_HEADER_LABEL, ""

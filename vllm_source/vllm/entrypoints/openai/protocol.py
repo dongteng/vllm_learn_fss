@@ -555,26 +555,26 @@ class ResponsesRequest(OpenAIBaseModel):
         return data
 
 
-class ChatCompletionRequest(OpenAIBaseModel):
+class ChatCompletionRequest(OpenAIBaseModel): #的字段顺序和命名完全按照 OpenAI 官方文档的 /chat/completions 接口规范来排列。
     # Ordered by official OpenAI API documentation
     # https://platform.openai.com/docs/api-reference/chat/create
     messages: list[ChatCompletionMessageParam]
     model: str | None = None
-    frequency_penalty: float | None = 0.0
-    logit_bias: dict[str, float] | None = None
-    logprobs: bool | None = False
-    top_logprobs: int | None = 0
+    frequency_penalty: float | None = 0.0 #频率越高越惩罚
+    logit_bias: dict[str, float] | None = None  #手动偏置特定 token 的 logit（正值鼓励，负值禁止，如 -100 禁掉某个词）
+    logprobs: bool | None = False #是否返回每个生成token的log概率
+    top_logprobs: int | None = 0  #当 logprobs=True 时，返回 top N 个候选 token 的概率（N 通常 ≤5
     max_tokens: int | None = Field(
         default=None,
         deprecated="max_tokens is deprecated in favor of "
         "the max_completion_tokens field",
-    )
+    )                             #已弃用：最大生成 token 数（现在推荐用 max_completion_tokens）
     max_completion_tokens: int | None = None
-    n: int | None = 1
-    presence_penalty: float | None = 0.0
-    response_format: AnyResponseFormat | None = None
+    n: int | None = 1             #生成几个独立的回答（n 个 choices）
+    presence_penalty: float | None = 0.0 #存在惩罚：
+    response_format: AnyResponseFormat | None = None #强制输出格式（如 {"type": "json_object"}）
     seed: int | None = Field(None, ge=_LONG_INFO.min, le=_LONG_INFO.max)
-    stop: str | list[str] | None = []
+    stop: str | list[str] | None = [] #这岂不是类共享属性？
     stream: bool | None = False
     stream_options: StreamOptions | None = None
     temperature: float | None = None
@@ -586,10 +586,10 @@ class ChatCompletionRequest(OpenAIBaseModel):
         | Literal["required"]
         | ChatCompletionNamedToolChoiceParam
         | None
-    ) = "none"
-    reasoning_effort: Literal["low", "medium", "high"] | None = None
-    include_reasoning: bool = True
-    parallel_tool_calls: bool | None = True
+    ) = "none"  #五种工具，1 完全禁用   2.自主调用  3.必须调用 不能直接回答  4.强制调用某种工具 5.默认行为
+    reasoning_effort: Literal["low", "medium", "high"] | None = None #花费多少推理计算量来思考
+    include_reasoning: bool = True #是否把模型的思考过程都返回给你
+    parallel_tool_calls: bool | None = True #允许一次调用多个工具 并行执行
 
     # NOTE this will be ignored by vLLM
     user: str | None = None
@@ -598,29 +598,29 @@ class ChatCompletionRequest(OpenAIBaseModel):
     use_beam_search: bool = False
     top_k: int | None = None
     min_p: float | None = None
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = None #出现一次就惩罚
     length_penalty: float = 1.0
-    stop_token_ids: list[int] | None = []
+    stop_token_ids: list[int] | None = [] #指定一组 token id，只要模型生成到其中任意一个 token，就立刻停止生成。
     include_stop_str_in_output: bool = False
-    ignore_eos: bool = False
-    min_tokens: int = 0
-    skip_special_tokens: bool = True
-    spaces_between_special_tokens: bool = True
+    ignore_eos: bool = False   #是否忽略模型的内置 EOS token，继续生成直到 max_tokens 或其他 stop。
+    min_tokens: int = 0       #至少生成这么多 token 后才允许停止（即使遇到 stop/EOS）。
+    skip_special_tokens: bool = True  #detokenize 时是否跳过特殊 token（如 <pad>、<unk>）。
+    spaces_between_special_tokens: bool = True #在特殊 token 之间是否插入空格（detokenize 时）。
     truncate_prompt_tokens: Annotated[int, Field(ge=-1)] | None = None
-    prompt_logprobs: int | None = None
+    prompt_logprobs: int | None = None #为 prompt 的前 N 个 token 计算 logprobs（返回在 response 中）。
     allowed_token_ids: list[int] | None = None
-    bad_words: list[str] = Field(default_factory=list)
+    bad_words: list[str] = Field(default_factory=list) #禁止列表：如果下一个 token 能完成这些词的序列，则禁止该 token。
     # --8<-- [end:chat-completion-sampling-params]
 
     # --8<-- [start:chat-completion-extra-params]
-    echo: bool = Field(
+    echo: bool = Field( #用来处理连续同 role 消息的自动前置合并。
         default=False,
         description=(
             "If true, the new message will be prepended with the last message "
             "if they belong to the same role."
         ),
     )
-    add_generation_prompt: bool = Field(
+    add_generation_prompt: bool = Field(#最后一条 user 消息后会自动加上 <|im_start|>assistant\n   模型就会自然地从 assistant 身份开始生成 → Claude Code 能正常收到 assistant 的回复、工具调用等
         default=True,
         description=(
             "If true, the generation prompt will be added to the chat template. "
@@ -628,7 +628,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "model."
         ),
     )
-    continue_final_message: bool = Field(
+    continue_final_message: bool = Field( #这个参数跟上个正好相反，不新建 assistant，继续最后一条
         default=False,
         description=(
             "If this is set, the chat will be formatted so that the final "
@@ -638,7 +638,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "Cannot be used at the same time as `add_generation_prompt`."
         ),
     )
-    add_special_tokens: bool = Field(
+    add_special_tokens: bool = Field( #是否在自动在 prompt 前后添加特殊 token
         default=False,
         description=(
             "If true, special tokens (e.g. BOS) will be added to the prompt "
@@ -648,8 +648,8 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "default)."
         ),
     )
-    documents: list[dict[str, str]] | None = Field(
-        default=None,
+    documents: list[dict[str, str]] | None = Field( #documents 的作用只是把“已经检索好的内容”放进 prompt。vLLM 本身只负责 推理生成，不负责检索系统。
+        default=None, #很多生产系统其实不用 documents 这个字段 ，直接把内容拼进message
         description=(
             "A list of dicts representing documents that will be accessible to "
             "the model if it is performing RAG (retrieval-augmented generation)."
@@ -682,7 +682,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
         default=None,
         description="Additional kwargs for structured outputs",
     )
-    priority: int = Field(
+    priority: int = Field(#控制请求在vllm调度序列中的优先级，数字越小，请求越先被处理
         default=0,
         description=(
             "The priority of the request (lower means earlier handling; "
@@ -699,6 +699,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
         ),
     )
     logits_processors: LogitsProcessors | None = Field(
+    #在模型采样token之前，对logits做自定义修改，vllm会动态加载这个类
         default=None,
         description=(
             "A list of either qualified names of logits processors, or "
@@ -712,7 +713,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
         ),
     )
     return_tokens_as_token_ids: bool | None = Field(
-        default=None,
+        default=None, #和 logprobs 功能一起使用的  当返回 token 概率时，用 token_id 表示 token，而不是用字符串。
         description=(
             "If specified with 'logprobs', tokens are represented "
             " as strings of the form 'token_id:{token_id}' so that tokens "
@@ -729,7 +730,8 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "need to map generated text back to input tokens."
         ),
     )
-    cache_salt: str | None = Field(
+    cache_salt: str | None = Field( #给 prompt cache 加一个“秘密盐值”，防止别人通过缓存命中推测你的 prompt
+    #如果是多租户服务 很适合。盐（salt）只参与 cache key 的 hash 计算，不会进入模型输入。
         default=None,
         description=(
             "If specified, the prefix cache will be salted with the provided "
@@ -741,6 +743,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
         ),
     )
     kv_transfer_params: dict[str, Any] | None = Field(
+        #分离式推理用，用于不通推理节点之间传输kv cache。
         default=None,
         description="KVTransfer parameters used for disaggregated serving.",
     )

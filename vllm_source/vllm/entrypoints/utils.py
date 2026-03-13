@@ -82,16 +82,16 @@ def with_cancellation(handler_func):
 
     # Functools.wraps is required for this wrapper to appear to fastapi as a
     # normal route handler, with the correct request type hinting.
-    @functools.wraps(handler_func)
+    @functools.wraps(handler_func) #@functools.wraps 保持原函数的元信息（函数名、文档、类型注解等）
     async def wrapper(*args, **kwargs):
         # The request is either the second positional arg or `raw_request`
-        request = args[1] if len(args) > 1 else kwargs["raw_request"]
+        request = args[1] if len(args) > 1 else kwargs["raw_request"] #从参数里找到 HTTP request 对象。
 
         handler_task = asyncio.create_task(handler_func(*args, **kwargs))
-        cancellation_task = asyncio.create_task(listen_for_disconnect(request))
+        cancellation_task = asyncio.create_task(listen_for_disconnect(request)) #一直在监听客户端是否断开连接
 
         done, pending = await asyncio.wait(
-            [handler_task, cancellation_task], return_when=asyncio.FIRST_COMPLETED
+            [handler_task, cancellation_task], return_when=asyncio.FIRST_COMPLETED #只要 两个任务里有一个先完成，就结束等待。
         )
         for task in pending:
             task.cancel()
@@ -117,12 +117,12 @@ def load_aware_call(func):
                 "raw_request required when server load tracking is enabled"
             )
 
-        if not getattr(raw_request.app.state, "enable_server_load_tracking", False):
+        if not getattr(raw_request.app.state, "enable_server_load_tracking", False): #如果没有启用 enable_server_load_tracking，直接执行原接口逻辑，不做统计
             return await func(*args, **kwargs)
 
         # ensure the counter exists
         if not hasattr(raw_request.app.state, "server_load_metrics"):
-            raw_request.app.state.server_load_metrics = 0
+            raw_request.app.state.server_load_metrics = 0 #计数器保存在 app.state，全局共享
 
         raw_request.app.state.server_load_metrics += 1
         try:

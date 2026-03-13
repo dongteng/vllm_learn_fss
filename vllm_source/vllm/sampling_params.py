@@ -486,7 +486,7 @@ class SamplingParams(
                     self.stop_token_ids = list(eos_ids)
 
     def update_from_tokenizer(self, tokenizer: TokenizerLike) -> None:
-        if not self.bad_words:
+        if not self.bad_words: #把一组禁止出现的词 转换成对应的token_id列表，后续生成时候禁止这些词
             return
         self._bad_words_token_ids = []
         for bad_word in self.bad_words:

@@ -409,8 +409,8 @@ class AsyncLLM(EngineClient):
     # requests we don't need to send multiple messages to core proc,
     # and so we don't need multiple streams which then get
     # re-multiplexed in the API server anyhow.
-    #目前这个接口一次只能处理一个prompt， 理想目标是一次请求传多个prompt，
-    async def generate(
+    #目前这个接口一次只能处理一个prompt， 理想目标是一次请求传多个prompt， 这样就能减少跨进程通信次数，提高吞吐量
+    async def generate( #返回一个异步生成器，意味着api server不需要等待整个文本生成完，而是每生成一个token就可以立即通过yield发送给前端用户，极大降低了TTFT
         self,
         prompt: EngineCoreRequest | PromptType,
         sampling_params: SamplingParams,

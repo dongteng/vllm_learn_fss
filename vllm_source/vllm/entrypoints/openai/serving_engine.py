@@ -292,7 +292,7 @@ class OpenAIServing:
     ) -> Callable[[TokenizerLike], ReasoningParser] | None:
         """Get the reasoning parser based on the name."""
         parser = None
-        if not reasoning_parser_name:
+        if not reasoning_parser_name or reasoning_parser_name == Ellipsis:
             return None
         try:
             parser = ReasoningParserManager.get_reasoning_parser(reasoning_parser_name)
@@ -1082,7 +1082,7 @@ class OpenAIServing:
 
         return TokensPrompt(prompt=input_text, prompt_token_ids=input_ids)
 
-    async def _tokenize_prompt_input_async(
+    async def _tokenize_prompt_input_async(#把一个prompt转为token id
         self,
         request: AnyRequest,
         tokenizer: TokenizerLike,
@@ -1285,7 +1285,7 @@ class OpenAIServing:
         _validate_truncation_size(
             self.max_model_len, params.truncate_prompt_tokens, tokenization_kwargs
         )
-
+        #用户请求进来，做前置校验和准备 ，交给input_processor做真正的输入处理，变成引擎真正能执行的格式，然后交付给后边的调度/执行流水线
         engine_request = self.input_processor.process_inputs(
             request_id,
             engine_prompt,

@@ -413,7 +413,7 @@ class OpenAIServingChat(OpenAIServing):
                         data_parallel_rank=data_parallel_rank,
                     )
 
-                    generator = self.engine_client.generate(
+                    generator = self.engine_client.generate( #调用引擎的底层生成接口，真正开始异步生成token
                         engine_request,
                         sampling_params,
                         sub_request_id,
@@ -425,7 +425,7 @@ class OpenAIServingChat(OpenAIServing):
                         data_parallel_rank=data_parallel_rank,
                     )
 
-                generators.append(generator)
+                generators.append(generator) #把返回的generator对象收集起来（存到一个列表里）方便后续统一管理、yield输出或取消请求。
         except ValueError as e:
             return self.create_error_response(e)
 
