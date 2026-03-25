@@ -95,7 +95,7 @@ class KVConnectorModelRunnerMixin:
         return output
 
     @staticmethod
-    def maybe_get_kv_connector_output(
+    def maybe_get_kv_connector_output(#如果系统启用了kv cache传输机制，就获取kv connector的输出；否则什么都不做
         scheduler_output: "SchedulerOutput",
     ) -> AbstractContextManager[KVConnectorOutput | None]:
         return (

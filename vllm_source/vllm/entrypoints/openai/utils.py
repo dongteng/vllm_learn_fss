@@ -22,8 +22,8 @@ _ChatCompletionResponseChoiceT = TypeVar(
 def maybe_filter_parallel_tool_calls(
     choice: _ChatCompletionResponseChoiceT, request: ChatCompletionRequest
 ) -> _ChatCompletionResponseChoiceT:
-    """Filter to first tool call only when parallel_tool_calls is False."""
-
+    """Filter to first tool call only when parallel_tool_calls is False.“工具调用裁剪器”：当不允许并行时，只保留第一个 tool call
+    """
     if request.parallel_tool_calls:
         return choice
 

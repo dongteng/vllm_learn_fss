@@ -180,7 +180,7 @@ def _validate_truncation_size(
     max_model_len: int,
     truncate_prompt_tokens: int | None,
     tokenization_kwargs: dict[str, Any] | None = None,
-) -> int | None:
+) -> int | None:                                #决定要不要截断 prompt，以及“最多保留多少 token”
     if truncate_prompt_tokens is not None:
         if truncate_prompt_tokens <= -1:
             truncate_prompt_tokens = max_model_len
@@ -208,7 +208,7 @@ def get_max_tokens(
     request: ChatCompletionRequest | CompletionRequest,
     input_length: int,
     default_sampling_params: dict,
-) -> int:
+) -> int: #算出这次最多还能生成多少token，并取多个限制里的最小值
     max_tokens = getattr(request, "max_completion_tokens", None) or request.max_tokens
     default_max_tokens = max_model_len - input_length
     max_output_tokens = current_platform.get_max_output_tokens(input_length)

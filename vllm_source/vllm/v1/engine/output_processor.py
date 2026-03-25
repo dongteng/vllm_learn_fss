@@ -501,7 +501,7 @@ class OutputProcessor:
         # Track the external_req_id -> [internal_req_id, ...] mapping
         self.external_req_ids[req_state.external_req_id].append(request_id)
 
-    def process_outputs(
+    def process_outputs( #接收接收引擎核心（EngineCore）刚刚计算完的一批原始输出（一批请求各自的新 token），对这批输出做最后一公里处理，然后把结果尽快推给用户（通过queue或直接返回），同时完成统计、清理、提前终止等副作用
         self,
         engine_core_outputs: list[EngineCoreOutput],
         engine_core_timestamp: float | None = None,
@@ -690,7 +690,7 @@ class OutputProcessor:
             if req_state.n:
                 span.set_attribute(SpanAttributes.GEN_AI_REQUEST_N, req_state.n)
 
-    def _update_stats_from_output(
+    def _update_stats_from_output(#当模型刚刚为某个请求生成了一个chunk（一个或多个token），就把这个请求相关的关键指标（时间、token数、是否prefill、lora等信息）反馈给本次迭代的全局统计对象IterationStats，用于后续TTFT,TPOT、吞吐、KC cache使用率等指标
         self,
         req_state: RequestState,
         engine_core_output: EngineCoreOutput,

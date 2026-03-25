@@ -79,7 +79,7 @@ class CachedRequestState:
         return -1
 
 
-class InputBatch:
+class InputBatch: #一次GPU forward 所有request的输入数据结构
     def __init__(
         self,
         max_num_reqs: int,

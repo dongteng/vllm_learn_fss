@@ -230,33 +230,33 @@ class OpenAIServingChat(OpenAIServing):
         raw_request: Request | None = None,
     ) -> AsyncGenerator[str, None] | ChatCompletionResponse | ErrorResponse:
         """
-        Chat Completion API similar to OpenAI's API.
+        Chat Completion API similar to OpenAI's API.                   异步创建 Chat Completion（对齐 OpenAI 的接口行为）
 
-        See https://platform.openai.com/docs/api-reference/chat/create
+        See https://platform.openai.com/docs/api-reference/chat/create  核心流程：校验 -> 预处理 -> 构造请求 -> 调用引擎生成 -> 返回（流式 / 非流式）
         for the API specification. This API mimics the OpenAI
         Chat Completion API.
         """
-        error_check_ret = await self._check_model(request)
+        error_check_ret = await self._check_model(request)             # 1.模型检查，校验请求中的模型是否合法 可用
         if error_check_ret is not None:
             logger.error("Error with model %s", error_check_ret)
             return error_check_ret
 
-        # If the engine is dead, raise the engine's DEAD_ERROR.
-        # This is required for the streaming case, where we return a
+        # If the engine is dead, raise the engine's DEAD_ERROR.                 如果引擎已经死亡，则抛出引擎的 DEAD_ERROR。
+        # This is required for the streaming case, where we return a            这是流式处理所必需的，因为我们会在真正生成文本之前就返回一个成功状态
         # success status before we actually start generating text :).
         if self.engine_client.errored:
             raise self.engine_client.dead_error
 
         try:
-            lora_request = self._maybe_get_adapters(
+            lora_request = self._maybe_get_adapters(                            #判断是否要加额外适配器（如多模态/lora）
                 request, supports_default_mm_loras=True
             )
 
-            model_name = self.models.model_name(lora_request)
+            model_name = self.models.model_name(lora_request)                   #获取实际使用的模型名（可能被lora覆盖）
 
-            tokenizer = await self.engine_client.get_tokenizer()
+            tokenizer = await self.engine_client.get_tokenizer()                #初始化tokenizer
 
-            tool_parser = self.tool_parser
+            tool_parser = self.tool_parser                                      #获取工具解析器
 
             if isinstance(tokenizer, MistralTokenizer):
                 # because of issues with pydantic we need to potentially
@@ -273,7 +273,7 @@ class OpenAIServingChat(OpenAIServing):
                 and not self.use_harmony
             )
 
-            # Validate tool_choice when tool parsing is required but unavailable
+            # Validate tool_choice when tool parsing is required but unavailable   #如果用户要求tool，但当前环境不支持->报错
             if tool_parsing_unavailable and request.tool_choice not in (
                 None,
                 "none",
@@ -292,7 +292,7 @@ class OpenAIServingChat(OpenAIServing):
                         "--tool-call-parser to be set"
                     )
 
-            if request.tools is None or (
+            if request.tools is None or (                                           #tool转成dict  给模型用
                 request.tool_choice == "none"
                 and self.exclude_tools_when_tool_choice_none
             ):
@@ -300,8 +300,8 @@ class OpenAIServingChat(OpenAIServing):
             else:
                 tool_dicts = [tool.model_dump() for tool in request.tools]
 
-            if not self.use_harmony:
-                # Common case.
+            if not self.use_harmony:                                                #prompt构造
+                # Common case.                                                      #常规路径
                 error_check_ret = self._validate_chat_template(
                     request_chat_template=request.chat_template,
                     chat_template_kwargs=request.chat_template_kwargs,
@@ -309,7 +309,7 @@ class OpenAIServingChat(OpenAIServing):
                 )
                 if error_check_ret is not None:
                     return error_check_ret
-                conversation, engine_prompts = await self._preprocess_chat(
+                conversation, engine_prompts = await self._preprocess_chat(         #把messages转为模型能理解的prompt
                     request,
                     tokenizer,
                     request.messages,
@@ -324,7 +324,7 @@ class OpenAIServingChat(OpenAIServing):
                     add_special_tokens=request.add_special_tokens,
                 )
             else:
-                # For GPT-OSS.
+                # For GPT-OSS.                                                      #特殊形式
                 should_include_tools = tool_dicts is not None
                 conversation, engine_prompts = self._make_request_with_harmony(
                     request, should_include_tools
@@ -337,35 +337,35 @@ class OpenAIServingChat(OpenAIServing):
             f"chatcmpl-{self._base_request_id(raw_request, request.request_id)}"
         )
 
-        request_metadata = RequestResponseMetadata(request_id=request_id)
+        request_metadata = RequestResponseMetadata(request_id=request_id)           #记录metadata 方便tracing debug
         if raw_request:
             raw_request.state.request_metadata = request_metadata
 
-        # Extract data_parallel_rank from header (router can inject it)
+        # Extract data_parallel_rank from header (router can inject it)             #分布式信息（多卡、多节点）
         data_parallel_rank = self._get_data_parallel_rank(raw_request)
 
         # Schedule the request and get the result generator.
         generators: list[AsyncGenerator[RequestOutput, None]] = []
         try:
             for i, engine_prompt in enumerate(engine_prompts):
-                prompt_text, _, _ = self._get_prompt_components(engine_prompt)
+                prompt_text, _, _ = self._get_prompt_components(engine_prompt)      #拿到prompt文本
                 # If we are creating sub requests for multiple prompts, ensure that they
                 # have unique request ids.
                 sub_request_id = (
-                    request_id if len(engine_prompts) == 1 else f"{request_id}_{i}"
+                    request_id if len(engine_prompts) == 1 else f"{request_id}_{i}" #生成子请求id
                 )
 
-                if self.default_sampling_params is None:
+                if self.default_sampling_params is None:                            #默认采样参数
                     self.default_sampling_params = {}
 
-                max_tokens = get_max_tokens(
+                max_tokens = get_max_tokens(                                        #计算max_tokens防止超长
                     max_model_len=self.max_model_len,
                     request=request,
                     input_length=len(engine_prompt["prompt_token_ids"]),
                     default_sampling_params=self.default_sampling_params,
                 )
 
-                sampling_params: SamplingParams | BeamSearchParams
+                sampling_params: SamplingParams | BeamSearchParams                  #构造采样策略
                 if request.use_beam_search:
                     sampling_params = request.to_beam_search_params(
                         max_tokens, self.default_sampling_params
@@ -376,25 +376,25 @@ class OpenAIServingChat(OpenAIServing):
                         self.model_config.logits_processor_pattern,
                         self.default_sampling_params,
                     )
-                    validate_logits_processors_parameters(
+                    validate_logits_processors_parameters(                          #检查logits_processor参数是否合法
                         self.logits_processors,
                         sampling_params,
                     )
 
-                self._log_inputs(
+                self._log_inputs(                                                   #打日志（方便排查问题）
                     sub_request_id,
                     engine_prompt,
                     params=sampling_params,
                     lora_request=lora_request,
                 )
 
-                trace_headers = (
+                trace_headers = (                                                      #trace链路跟踪
                     None
                     if raw_request is None
                     else await self._get_trace_headers(raw_request.headers)
                 )
 
-                if isinstance(sampling_params, BeamSearchParams):
+                if isinstance(sampling_params, BeamSearchParams):                      #选择生成方式
                     generator = self.beam_search(
                         prompt=engine_prompt,
                         request_id=sub_request_id,
@@ -402,7 +402,7 @@ class OpenAIServingChat(OpenAIServing):
                         lora_request=lora_request,
                         trace_headers=trace_headers,
                     )
-                else:
+                else:                                                                  #核心：构造engine_request ,把输入包装成可以被调度、执行、缓存的完整请求
                     engine_request, tokenization_kwargs = await self._process_inputs(
                         sub_request_id,
                         engine_prompt,
@@ -413,7 +413,7 @@ class OpenAIServingChat(OpenAIServing):
                         data_parallel_rank=data_parallel_rank,
                     )
 
-                    generator = self.engine_client.generate( #调用引擎的底层生成接口，真正开始异步生成token
+                    generator = self.engine_client.generate(                           #真正调用底层推理引擎，返回的是异步生长期（逐token产出）
                         engine_request,
                         sampling_params,
                         sub_request_id,
@@ -425,12 +425,12 @@ class OpenAIServingChat(OpenAIServing):
                         data_parallel_rank=data_parallel_rank,
                     )
 
-                generators.append(generator) #把返回的generator对象收集起来（存到一个列表里）方便后续统一管理、yield输出或取消请求。
+                generators.append(generator)                                            #收集generator（后面统一消费）
         except ValueError as e:
             return self.create_error_response(e)
 
-        assert len(generators) == 1
-        (result_generator,) = generators
+        assert len(generators) == 1                                                     #当前只支持单prompt
+        (result_generator,) = generators #解包
 
         # Streaming response
         if request.stream:
@@ -1649,7 +1649,7 @@ class OpenAIServingChat(OpenAIServing):
             kv_transfer_params=final_res.kv_transfer_params,
         )
 
-        # Log complete response if output logging is enabled
+        # Log complete response if output logging is enabled  如果启用了输出日志记录，则记录完整的响应结果。
         if self.enable_log_outputs and self.request_logger:
             for choice in choices:
                 output_text = ""

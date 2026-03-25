@@ -222,9 +222,9 @@ cached_load_custom_logitsprocs = lru_cache(_load_custom_logitsprocs)
 def validate_logits_processors_parameters(
     logits_processors: Sequence[str | type[LogitsProcessor]] | None,
     sampling_params: SamplingParams,
-):
+):  #检查你配置的logits处理器参数是否合法  可以在采样前动手脚，比如禁止某些词，强制某些词出现  调整温度、惩罚等  ，这些操作就是：logits processors
     logits_processors = (
-        tuple(logits_processors) if logits_processors is not None else None
+        tuple(logits_processors) if logits_processors is not None else None  #把输入统一成tuple，因为list不可hash , tuple可hash
     )
     for logits_procs in cached_load_custom_logitsprocs(logits_processors):
         logits_procs.validate_params(sampling_params)

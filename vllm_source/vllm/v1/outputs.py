@@ -138,8 +138,8 @@ class ECConnectorOutput:
     finished_recving: set[str] | None = None
 
 
-# ModelRunnerOutput is serialized and sent to the scheduler process.
-# This is expensive for torch.Tensor so prefer to use list instead.
+# ModelRunnerOutput is serialized and sent to the scheduler process. 将GPU跑完模型后的所有原始结果，打包并发回scheduler
+# This is expensive for torch.Tensor so prefer to use list instead. 跨进程传输数据需要经过序列化（Pickle）。如果直接传大量的、零散的 torch.Tensor，Python 会产生巨大的 CPU 开销。
 @dataclass
 class ModelRunnerOutput:
     # [num_reqs]
@@ -151,12 +151,12 @@ class ModelRunnerOutput:
     # num_generated_tokens is the number of tokens
     # generated in the current step. It can be different for
     # each request due to speculative/jump decoding.
-    sampled_token_ids: list[list[int]]
+    sampled_token_ids: list[list[int]]                      #生成结果
 
     # [num_reqs, max_num_logprobs + 1]
     # [num_reqs, max_num_logprobs + 1]
     # [num_reqs]
-    logprobs: LogprobsLists | None
+    logprobs: LogprobsLists | None                          #概率统计
 
     # req_id -> (token_ids, logprobs, ranks)
     # [prompt_len, num_prompt_logprobs]
@@ -165,7 +165,7 @@ class ModelRunnerOutput:
     prompt_logprobs_dict: dict[str, LogprobsTensors | None]
 
     # [num_reqs, hidden_size]
-    pooler_output: list[torch.Tensor | None]
+    pooler_output: list[torch.Tensor | None]                #向量产物
 
     kv_connector_output: KVConnectorOutput | None = None
 

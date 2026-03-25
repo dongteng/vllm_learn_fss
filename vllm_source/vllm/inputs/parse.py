@@ -110,7 +110,7 @@ def parse_singleton_prompt(prompt: SingletonPrompt) -> ParsedSingletonPrompt:
 
 def is_explicit_encoder_decoder_prompt(
     prompt: PromptType,
-) -> TypeIs[ExplicitEncoderDecoderPrompt]:
+) -> TypeIs[ExplicitEncoderDecoderPrompt]:                          #判断这个prompt是不是显式的encdoder-decoder prompt
     return isinstance(prompt, dict) and "encoder_prompt" in prompt
 
 

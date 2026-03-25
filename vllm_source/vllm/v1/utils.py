@@ -383,6 +383,10 @@ _PROFILER_FUNC = None
 
 
 def record_function_or_nullcontext(name: str) -> AbstractContextManager:
+    """
+    返回一个”性能分析用的“上下文管理器，如果没开profiling，就返回要给什么都不做的空context
+    也就是说它解决的问题是：要不要性能标记，如果要用哪种工具。
+    """
     global _PROFILER_FUNC
 
     # fast path assume it is set
@@ -390,9 +394,9 @@ def record_function_or_nullcontext(name: str) -> AbstractContextManager:
         return _PROFILER_FUNC(name)
 
     func = contextlib.nullcontext
-    if envs.VLLM_CUSTOM_SCOPES_FOR_PROFILING:
+    if envs.VLLM_CUSTOM_SCOPES_FOR_PROFILING:  #pytorch的profier api，作用是在 profiler 结果里标记一段代码，
         func = record_function
-    elif envs.VLLM_NVTX_SCOPES_FOR_PROFILING:
+    elif envs.VLLM_NVTX_SCOPES_FOR_PROFILING:  #NVTX 是 NVIDIA 的 profiling 标记工具。
         import nvtx
 
         func = nvtx.annotate

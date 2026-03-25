@@ -161,14 +161,14 @@ class SchedulerOutput:
     # list of the requests that are scheduled for the first time.
     # We cache the request's data in each worker process, so that we don't
     # need to re-send it every scheduling step.
-    scheduled_new_reqs: list[NewRequestData]
+    scheduled_new_reqs: list[NewRequestData] #本轮第一次被调度的请求
     # list of the requests that have been scheduled before.
-    # Since the request's data is already cached in the worker processes,
-    # we only send the diff to minimize the communication cost.
+    # Since the request's data is already cached in the worker processes, #已经调度过的请求
+    # we only send the diff to minimize the communication cost.           #因为已经缓存了数据，所以这里只发送diff部分 ，减少通信
     scheduled_cached_reqs: CachedRequestData
 
     # req_id -> num_scheduled_tokens
-    # Number of tokens scheduled for each request.
+    # Number of tokens scheduled for each request.  本轮调度中 每个请求的调度数量，并不是每次都是1，比如说prefill 一次多个
     num_scheduled_tokens: dict[str, int]
     # Total number of tokens scheduled for all requests.
     # Equal to sum(num_scheduled_tokens.values())
@@ -182,8 +182,8 @@ class SchedulerOutput:
     # to process that the request's 0-th and 1-th images in the current step.
     scheduled_encoder_inputs: dict[str, list[int]]
     # Number of common prefix blocks for all requests in each KV cache group.
-    # This can be used for cascade attention.
-    num_common_prefix_blocks: list[int]
+    # This can be used for cascade attention. 多个请求如果共享相同的 prompt 前缀，那么这些前缀对应的 KV cache block 可以共享。
+    num_common_prefix_blocks: list[int] #所有请求共有的 prefix block 数量。
 
     # Request IDs that are finished in between the previous and the current
     # steps. This is used to notify the workers about the finished requests
@@ -193,12 +193,12 @@ class SchedulerOutput:
     # freed from the encoder cache.
     free_encoder_mm_hashes: list[str]
 
-    # Request IDs that are preempted in this step.
-    # Only used for v2 model runner.
+    # Request IDs that are preempted in this step.  本次调度中被抢占的请求ID
+    # Only used for v2 model runner. 只在v2 model runner中使用
     preempted_req_ids: set[str] | None = None
 
     # Whether the scheduled requests have all the output tokens they
-    # need to perform grammar bitmask computation.
+    # need to perform grammar bitmask computation. “当前这一批已经被调度（scheduled）的请求，它们生成的输出 token 是否已经足够完整，可以开始做下一阶段的 ‘grammar bitmask’ 计算了？”
     pending_structured_output_tokens: bool = False
 
     # KV Cache Connector metadata.

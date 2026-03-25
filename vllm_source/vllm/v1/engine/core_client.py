@@ -665,7 +665,7 @@ class MPClient(EngineCoreClient):
             self.pending_messages.appendleft((tracker, msg))
 
     def free_pending_messages(self):
-        while self.pending_messages and self.pending_messages[-1][0].done:
+        while self.pending_messages and self.pending_messages[-1][0].done:   #不断检查pending_messages最后一个消息，如果这个消息已经处理完成 就把它从队列里删掉
             self.pending_messages.pop()
 
     def dp_engines_running(self) -> bool:
@@ -1033,22 +1033,22 @@ class AsyncMPClient(MPClient):
         request_type: EngineCoreRequestType,
         request: Any,
         engine: EngineIdentity | None = None,
-    ) -> Awaitable[Any]:
+    ) -> Awaitable[Any]: #展示了如何从python对象变成二进制网络数据包 并发送给引擎核心的，它是API服务与EngineCore之间通信的底层封包协议
         if engine is None:
-            engine = self.core_engine
+            engine = self.core_engine  #在多机多卡下，可能存在多个推理引擎。这段逻辑确保了如果没指定具体的引擎，请求就会发给默认的core_engine
 
-        message = (request_type.value, *self.encoder.encode(request))
+        message = (request_type.value, *self.encoder.encode(request))  #*是解包操作，将编码后的元组展开，组成一个完整的消息体。
         return self._send_input_message(message, engine, request)
 
     def _send_input_message(
         self, message: tuple[bytestr, ...], engine: EngineIdentity, objects: Any
     ) -> Awaitable[Any]:
         """
-        objects is a reference to retain until zmq is finished with the
-        buffers, in case they were extracted from tensors in the request.
+        objects is a reference to retain until zmq is finished with the    #将消息异步发送给计算节点，并确保在ZMQ真正把数据发出去之前，这些数据在内存中不被销毁
+        buffers, in case they were extracted from tensors in the request.  #objects是用来托管内存生命周期的，防止zmq还没发完，python就把底层内存释放了
         """
         self.ensure_alive()
-        self.free_pending_messages()
+        self.free_pending_messages()   #清理已经完成的消息
 
         msg = (engine,) + message
         if not objects or len(msg) <= 3:

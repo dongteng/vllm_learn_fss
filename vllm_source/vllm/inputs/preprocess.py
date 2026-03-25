@@ -670,7 +670,7 @@ class InputPreprocessor:
         tokenization_kwargs: dict[str, Any] | None = None,
         *,
         mm_uuids: MultiModalUUIDDict | None = None,
-    ) -> ProcessorInputs:
+    ) -> ProcessorInputs:                           #根据模型类型，把prompt 分发到不同的处理逻辑
         if self.model_config.is_encoder_decoder:
             # Encoder-decoder model requires special mapping of
             # input prompts to encoder & decoder.
@@ -700,7 +700,7 @@ class InputPreprocessor:
         *,
         mm_uuids: MultiModalUUIDDict | None = None,
     ) -> ProcessorInputs:
-        """Preprocess the input prompt."""
+        """Preprocess the input prompt. 把prompt与处理成模型可用格式，并顺便统计多模态缓存的命中情况"""
         res = self._preprocess(
             prompt,
             tokenization_kwargs,

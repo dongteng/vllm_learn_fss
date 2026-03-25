@@ -117,7 +117,7 @@ def register_model_loader(load_format: str):
 
 def get_model_loader(load_config: LoadConfig) -> BaseModelLoader:
     """Get a model loader based on the load format."""
-    load_format = load_config.load_format
+    load_format = load_config.load_format                       #从配置对象中读取用户定义的格式字符串 ，常见的包括auto  satetensors pt gguf sharded_state
     if load_format not in _LOAD_FORMAT_TO_MODEL_LOADER:
         raise ValueError(f"Load format `{load_format}` is not supported")
     return _LOAD_FORMAT_TO_MODEL_LOADER[load_format](load_config)

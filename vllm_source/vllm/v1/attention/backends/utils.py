@@ -1007,17 +1007,17 @@ def reorder_batch_to_split_decodes_and_prefills(
     """
     Reorders the batch to split into prefill and decode requests; places all
     requests with <= decode_threshold tokens at the front of the batch.
-
+    该函数通过重新排列批次（Batch）将请求分为“预填充（Prefill）”和“解码（Decode）”两部分；将所有调度 Token 数量 < decode_threshold（解码阈值）的请求排在批次的最前面。
     Returns:
-        True if the batch was modified, False otherwise.
+        True if the batch was modified, False otherwise. #返回值： 如果批次顺序被修改则返回 True，否则返回 False。
     """
-    # We now want to reorder the batch into decode → extend → prefill order
+    # We now want to reorder the batch into decode → extend → prefill order     #我们希望将批次按照 解码 (Decode) → 扩展 (Extend) → 预填充 (Prefill) 的顺序排列
     # where:
-    #   decode: request with num_scheduled_tokens <= decode_threshold
-    #   extend: non-decode request with existing context
-    #   prefill: non-decode request with no existing context
-    # NOTE for now we loosely use "decode" to mean requests where attention is
-    #  likely memory-bound and "prefill" to mean requests where attention is
+    #   decode: request with num_scheduled_tokens <= decode_threshold           #Decode: 调度 Token 数 $\le$ 阈值的请求（通常为 1）。
+    #   extend: non-decode request with existing context                        #Extend: 调度 Token 数大于阈值，且已有历史上下文的请求。
+    #   prefill: non-decode request with no existing context                    #Prefill: 调度 Token 数大于阈值，且没有历史上下文的请求（新请求）。
+    # NOTE for now we loosely use "decode" to mean requests where attention is  #注意：目前我们粗略地用 "Decode" 代表访存密集型（Memory-bound）请求，用 "Prefill" 代表计算密集型（Compute-bound）请求
+    #  likely memory-bound and "prefill" to mean requests where attention is    #重排目的：把性质相似的请求扎堆，让底层的注意力算子（Attention Kernel）能一次性处理一类任务，从而减少 GPU 指令切换的开销。
     #  likely compute-bound,
     num_reqs = len(input_batch.req_ids)
     num_scheduled_tokens = [

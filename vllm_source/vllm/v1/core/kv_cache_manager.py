@@ -116,19 +116,19 @@ class KVCacheManager:
         # potential configs we could expose in the future.
         self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
 
-        self.coordinator = get_kv_cache_coordinator(
+        self.coordinator = get_kv_cache_coordinator( #kv cache 协调器对象
             kv_cache_config=kv_cache_config,
             max_model_len=self.max_model_len,
             use_eagle=self.use_eagle,
-            enable_caching=self.enable_caching,
-            enable_kv_cache_events=enable_kv_cache_events,
+            enable_caching=self.enable_caching, #是否启用 prefix caching
+            enable_kv_cache_events=enable_kv_cache_events, #是否记录 KV cache 事件，用于监控/分析。
             dcp_world_size=dcp_world_size,
             pcp_world_size=pcp_world_size,
             hash_block_size=hash_block_size,
             metrics_collector=self.metrics_collector,
         )
-        self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
-        self.block_pool = self.coordinator.block_pool
+        self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups) #KV cache 可能会被分成多个 组（group），每组管理若干层的 cache。
+        self.block_pool = self.coordinator.block_pool #block_pool 是缓存 block 的池子，由 coordinator 管理。每个 block 对应一段 token 的 KV cache。
         self.kv_cache_config = kv_cache_config
 
         # Pre-constructed KVCacheBlocks with no blocks, callers should use this
@@ -158,21 +158,22 @@ class KVCacheManager:
         if not self.log_stats:
             return None
         stats = self.prefix_cache_stats
-        self.prefix_cache_stats = PrefixCacheStats()
+        self.prefix_cache_stats = PrefixCacheStats() #重新建立一个空的通缉对象
         return stats
 
     def get_computed_blocks(self, request: Request) -> tuple[KVCacheBlocks, int]:
         """Get the computed (cached) blocks for the request.
         Note that the computed blocks must be full.
-
+        这个函数的作用就是，找出当前请求中，哪些前缀已经算过，可以直接复用(cache hit)
         Args:
-            request: The request to get the computed blocks.
+            request: The request to get the computed blocks. 要获取已计算块的请求
 
         Returns:
             A tuple containing:
                 - A list of blocks that are computed for the request.
                 - The number of computed tokens.
         """
+
         # We skip finding the prefix cache hit when prefix caching is
         # disabled or the request is marked as skipping kv cache read
         # (which happens when the request requires prompt logprobs
@@ -214,24 +215,24 @@ class KVCacheManager:
         delay_cache_blocks: bool = False,
         num_encoder_tokens: int = 0,
     ) -> KVCacheBlocks | None:
-        """Add slots for a request with new tokens to append.
+        """Add slots for a request with new tokens to append. 为一个请求添加用于追加新token的slots
 
         Args:
-            request: The request to allocate slots.
-            num_new_tokens: The number of new tokens to be allocated and computed.
-            num_new_computed_tokens: The number of new computed tokens just
+            request: The request to allocate slots.                                 需要分配slots的请求
+            num_new_tokens: The number of new tokens to be allocated and computed.  需要新分配并计算的token数量
+            num_new_computed_tokens: The number of new computed tokens just         刚刚命中前缀缓存（prefix cache）的新计算 token 数量（不包括外部 token）
                 hitting the prefix caching, excluding external tokens.
-            new_computed_blocks: The cached blocks for the above new computed
+            new_computed_blocks: The cached blocks for the above new computed       上述这些新命中缓存的 token 对应的缓存 blocks，按 KV cache 分组组成的元组
                 tokens, grouped as a tuple by kv cache groups.
-            num_lookahead_tokens: The number of speculative tokens to allocate.
+            num_lookahead_tokens: The number of speculative tokens to allocate.     需要预分配的推测（speculative）token 数量 （用于带 KV cache 的推测解码方法，例如 eagle）
                 This is used by spec decode proposers with kv-cache such
                 as eagle.
-            num_external_computed_tokens: The number of tokens that their
+            num_external_computed_tokens: The number of tokens that their           这些 token 的 KV cache 不在 vLLM 内部缓存，而是由外部 connector 缓存的数量
                 KV caches are not cached by vLLM but cached by the connector.
-            delay_cache_blocks: Whether to skip caching the blocks. This is
+            delay_cache_blocks: Whether to skip caching the blocks. This is         是否延迟缓存这些Blocks （用于P/D场景，比如kv 传输还没完成，激昂在后续部分完成）
                 used by P/D when allocating blocks used in a KV transfer
                 which will complete in a future step.
-            num_encoder_tokens: The number of encoder tokens to allocate for
+            num_encoder_tokens: The number of encoder tokens to allocate for        为 encoder-decoder 模型中的 cross-attention 分配的 encoder token 数量（例如 Whisper）对于 decoder-only 模型，这个值应为 0
                 cross-attention in encoder-decoder models(e.g., Whisper).
                 For decoder-only models, this should be 0.
 
@@ -269,24 +270,24 @@ class KVCacheManager:
         lookahead = num_lookahead_tokens
         ```
 
-        NOTE: for new tokens which include both verified and unverified draft
+        NOTE: for new tokens which include both verified and unverified draft   对于新token，我们只会缓存已验证的token（通过将数量限制为request.num_tokens实现）
         tokens, we only cache the verified tokens (by capping the number at
         `request.num_tokens`).
 
-        The allocation has three stages:
-        - Free unnecessary blocks in `comp` and check
+        The allocation has three stages:                                          分配过程分为三个阶段：
+        - Free unnecessary blocks in `comp` and check                             -在comp（已有缓存部分）释放不再需要的blocks，并检查当前是否有足够的blocks
            if we have sufficient free blocks (return None if not).
-        - Handle prefix tokens (`comp + new_comp + ext_comp`):
-            - Free unnecessary blocks (e.g. outside sliding window)
-            - Allocate new blocks for `ext_comp` tokens inside
+        - Handle prefix tokens (`comp + new_comp + ext_comp`):                    -处理前缀tokens（comp + new_comp + ext_comp）
+            - Free unnecessary blocks (e.g. outside sliding window)                    释放不再需要的blocks(例如活动窗口之外的)
+            - Allocate new blocks for `ext_comp` tokens inside                         为滑动窗口内的ext_comp token分配新的blocks
               sliding window
-        - Allocate new blocks for tokens to be computed (`new + lookahead`)
+        - Allocate new blocks for tokens to be computed (`new + lookahead`)       -为需要计算的token分配新的blocks
 
         Returns:
             A list of new allocated blocks.
         """
-        # When loading KV data asynchronously, we may have zero new tokens to
-        # compute while still allocating slots for externally computed tokens.
+        # When loading KV data asynchronously, we may have zero new tokens to     当以异步方式加载kv 数据时，可能会出现这样的情况：
+        # compute while still allocating slots for externally computed tokens.    没有新的token需要计算，但仍然需要为外部已计算的token分配slots
         if num_new_tokens == 0 and num_external_computed_tokens == 0:
             raise ValueError(
                 "num_new_tokens must be greater than 0 when there are no "

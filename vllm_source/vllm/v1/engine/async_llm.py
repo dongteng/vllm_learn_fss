@@ -398,8 +398,8 @@ class AsyncLLM(EngineClient):
         # Add the request to OutputProcessor (this process).
         self.output_processor.add_request(request, prompt, parent_req, index, queue)
 
-        # Add the EngineCoreRequest to EngineCore (separate process).
-        await self.engine_core.add_request_async(request)
+        # Add the EngineCoreRequest to EngineCore (separate process). 通过异步方式，将封装好的请求对象发送给负责执行推理的底层引擎核心
+        await self.engine_core.add_request_async(request)  #此处的self.engine_core是AsyncMPClient
 
         if self.log_requests:
             logger.info("Added request %s.", request.request_id)
@@ -424,14 +424,14 @@ class AsyncLLM(EngineClient):
         data_parallel_rank: int | None = None,
     ) -> AsyncGenerator[RequestOutput, None]:
         """
-        Main function called by the API server to kick off a request
-            * 1) Making an AsyncStream corresponding to the Request.
-            * 2) Processing the Input.
-            * 3) Adding the Request to the Detokenizer.
-            * 4) Adding the Request to the EngineCore (separate process).
+        Main function called by the API server to kick off a request            由API服务器调用以启动（kick off）请求的主函数
+            * 1) Making an AsyncStream corresponding to the Request.               1. 创建异步流 asyncStream：为该请求建立一个对应的输出流
+            * 2) Processing the Input.                                             2.输入处理 (Input Processing)：对请求内容进行预处理（如 Token 化、模板渲染等）。
+            * 3) Adding the Request to the Detokenizer.                            3.添加到反 Token 器 (Detokenizer)：将请求注册到负责将 Token ID 转回文字的模块。
+            * 4) Adding the Request to the EngineCore (separate process).          4.添加到引擎核心 (EngineCore)：将请求发送至引擎核心（这是一个独立的进程）。
 
-        A separate output_handler loop runs in a background AsyncIO task,
-        pulling outputs from EngineCore and putting them into the
+        A separate output_handler loop runs in a background AsyncIO task,       一个独立的输出处理循环在后台AsyncIO任务中运行，负责从EngineCore中拉取输出结果，并将
+        pulling outputs from EngineCore and putting them into the               其放入每个请求专属的AsyncStream中
         per-request AsyncStream.
 
         The caller of generate() iterates the returned AsyncGenerator,
@@ -569,7 +569,7 @@ class AsyncLLM(EngineClient):
 
         async def output_handler():
             """
-            一个异步无限循环，是vllm异步引擎中负责从EngineCore拉取原始输出->处理->分发给用户queue的核心后台任务
+            把EngineCore已经算好的token chunk  不断拿出来加工 塞到每个请求对应的asyncio.Queue里，让前端（openai兼容server, http handler）能尽快看到结果
             """
             try:
                 while True: #永不结束的循环，只要引擎活着，它就一直在后台运行
@@ -585,7 +585,7 @@ class AsyncLLM(EngineClient):
                     # Split outputs into chunks of at most
                     # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
                     # event loop for too long.
-                    #翻译：将输出拆分成不超过VLLM_V1_OUTPUT_PROC_CHUNK_SIZE的小块，这样就不会长时间阻塞事件循环
+                    #翻译：将输出拆分成不超过VLLM_V1_OUTPUT_PROC_CHUNK_SIZE的小块：如果一次性如理几千个序列的输出，里边有大量字符串操作、stop token 判断、正则匹配等，会阻塞事件循环几百毫秒甚至秒级。syncio 是单线程的，阻塞 = 整个服务器都卡住（新请求进不来、心跳断、超时等）。所以故意切成小块（默认256个输出/块），每处理完一块就让出一次控制权
                     if num_outputs <= envs.VLLM_V1_OUTPUT_PROC_CHUNK_SIZE:
                         slices = (outputs.outputs,)
                     else:
@@ -598,8 +598,8 @@ class AsyncLLM(EngineClient):
                     #同时，如果发现有请求因为stop tokens就提前结束，就立刻通知引擎终止它们
                     for i, outputs_slice in enumerate(slices):
                         # 2) Process EngineCoreOutputs.
-                        #process_outputs实际做了 把模型原始输出->转换成用户可读的请求结果+控制信号
-                        #里面通常包括detokenize ;stop string 判断; EOS判断; 生成RequestOutput;判断哪些请求可以中止
+                        #这一步干的事：把模型吐的 token id → 解码成字符串（detokenize）；判断有没有命中 stop_strings / stop_tokens；判断是不是到达 max_tokens；拼装成用户能看懂的 RequestOutput（包含 text delta、finish_reason 等）；把结果 put_nowait 进每个请求对应的 asyncio.Queue；收集哪些请求应该被提前终止（放进 reqs_to_abort）
+                        #注意：异步模式下，processed_outputs.request_outputs 是空的，因为已经直接塞 queue 了
                         processed_outputs = output_processor.process_outputs(
                             outputs_slice, outputs.timestamp, iteration_stats
                         )
@@ -612,7 +612,7 @@ class AsyncLLM(EngineClient):
                         if i + 1 < len(slices):
                             await asyncio.sleep(0)
 
-                        # 3) Abort any reqs that finished due to stop strings.
+                        # 3) Abort any reqs that finished due to stop strings. #把需要提前结束的请求通知引擎
                         await engine_core.abort_requests_async(processed_outputs.reqs_to_abort)
 
                     output_processor.update_scheduler_stats(outputs.scheduler_stats)

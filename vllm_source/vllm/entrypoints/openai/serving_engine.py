@@ -943,7 +943,7 @@ class OpenAIServing:
         prompt: str,
         tokenizer: TokenizerLike,
         add_special_tokens: bool,
-    ) -> TokensPrompt:
+    ) -> TokensPrompt: #把文本prompt转换为模型输入（toke_ids + 原始文本）。 核心流程： 文本->(可选小写化)->tokenizer编码->截断控制->校验->返回标准格式。返回TokensPrompt(包含prompt文本+ token_ids)
         async_tokenizer = self._get_async_tokenizer(tokenizer)
 
         if (
@@ -1162,8 +1162,8 @@ class OpenAIServing:
         add_special_tokens: bool = False,
     ) -> tuple[list[ConversationMessage], list[TokensPrompt]]:
         model_config = self.model_config
-
-        resolved_content_format = resolve_chat_template_content_format(
+        """把messages 变为模型可执行的prompt(token)  可以理解为：chatgpt风格输入-> chat template拼接成文本prompt-> tokenizer转成token ids -> 封装成engine_prompt(给推理引擎)   返回：conversation: 标准化后的对话结构（供日志 / tool / debug 使用）；engine_prompts:模型实际执行的输入（token级别）"""
+        resolved_content_format = resolve_chat_template_content_format(#eg:string
             chat_template,
             tool_dicts,
             chat_template_content_format,
@@ -1187,7 +1187,7 @@ class OpenAIServing:
 
         request_prompt: str | list[int]
 
-        if tokenizer is None:
+        if tokenizer is None: #这段 if-elif 是典型的“框架为了兼容几个特别作妖的 tokenizer 家族而被迫做的特殊处理”，尤其是 Mistral 和 DeepSeek-V3.2 这两个最不遵循“标准 HF chat template” 的模型。
             request_prompt = "placeholder"
         elif isinstance(tokenizer, MistralTokenizer):
             request_prompt = await self._apply_mistral_chat_template_async(
@@ -1212,9 +1212,9 @@ class OpenAIServing:
 
         mm_data = await mm_data_future
 
-        # tool parsing is done only if a tool_parser has been set and if
+        # tool parsing is done only if a tool_parser has been set and if     只有在设置了 tool_parser 且 tool_choice 不为 "none" 时，才会进行工具解析（tool parsing）
         # tool_choice is not "none" (if tool_choice is "none" but a tool_parser
-        # is set, we want to prevent parsing a tool_call hallucinated by the LLM
+        # is set, we want to prevent parsing a tool_call hallucinated by the LLM 如果 tool_choice 是 "none"，但仍然设置了 tool_parser，我们希望阻止解析 LLM 幻觉生成的 tool_call。）
         should_parse_tools = tool_parser is not None and (
             hasattr(request, "tool_choice") and request.tool_choice != "none"
         )
@@ -1234,7 +1234,7 @@ class OpenAIServing:
                 "when the tokenizer is not initialised",
             )
             prompt_inputs = TokensPrompt(prompt=request_prompt, prompt_token_ids=[1])
-        elif isinstance(request_prompt, str):
+        elif isinstance(request_prompt, str):                               #把文本prompt 转成 模型能吃的token（数字），而且异步执行的
             prompt_inputs = await self._tokenize_prompt_input_async(
                 request,
                 tokenizer,
@@ -1282,10 +1282,10 @@ class OpenAIServing:
     ) -> tuple[EngineCoreRequest, dict[str, Any]]:
         """Use the Processor to process inputs for AsyncLLM."""
         tokenization_kwargs: dict[str, Any] = {}
-        _validate_truncation_size(
+        _validate_truncation_size(              #决定要不要截断 prompt，以及“最多保留多少 token”
             self.max_model_len, params.truncate_prompt_tokens, tokenization_kwargs
         )
-        #用户请求进来，做前置校验和准备 ，交给input_processor做真正的输入处理，变成引擎真正能执行的格式，然后交付给后边的调度/执行流水线
+        #把输入包装成可以被调度、执行、缓存的完整请求
         engine_request = self.input_processor.process_inputs(
             request_id,
             engine_prompt,
@@ -1418,7 +1418,7 @@ class OpenAIServing:
         inputs: PromptType,
         params: SamplingParams | PoolingParams | BeamSearchParams | None,
         lora_request: LoRARequest | None,
-    ) -> None:
+    ) -> None:                          #把这次请求的输入（prompt /token/参数）记录到日志里
         if self.request_logger is None:
             return
 

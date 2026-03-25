@@ -53,11 +53,13 @@ class InputProcessor:
         self.structured_outputs_config = vllm_config.structured_outputs_config #结构化输出（JSON schema 等）支持
 
         self.generation_config_fields = self.model_config.try_get_generation_config()
-
+        # ========== 多模态相关 ==========
         self.mm_registry = mm_registry
+        # 多模态预处理缓存（避免重复处理图片/视频）
         self.mm_processor_cache = processor_cache_from_config(vllm_config, mm_registry)
 
-        #用户原始输入->模型能直接吃的输入的预处理核心组件
+        # ========== 核心组件 ==========
+        # 这是最关键的组件：负责把“用户输入 → 模型能吃的格式”
         self.input_preprocessor = InputPreprocessor(
             self.model_config,
             tokenizer,
@@ -455,7 +457,7 @@ class InputProcessor:
 
     @staticmethod
     def assign_request_id(request: EngineCoreRequest):
-        """Replace the externally supplied request ID with an internal request ID
+        """Replace the externally supplied request ID with an internal request ID    将用户传入的外部id转化为系统内部使用的唯一id
         that adds 8 random characters in order to ensure uniquness.
         """
         if request.external_req_id is not None:
@@ -478,9 +480,13 @@ class InputProcessor:
         priority: int = 0,
         data_parallel_rank: int | None = None,
     ) -> EngineCoreRequest:
-        self._validate_lora(lora_request)
-        self._validate_params(params)
+        """Process inputs into an EngineCoreRequest."""
 
+        self._validate_lora(lora_request) #lora是否合法
+        self._validate_params(params)     #sampling参数是否合法
+
+
+        #多卡相关检查
         data_parallel_size = self.vllm_config.parallel_config.data_parallel_size
         if data_parallel_rank is not None and not (
             0 <= data_parallel_rank < data_parallel_size
@@ -489,15 +495,15 @@ class InputProcessor:
                 f"data_parallel_rank {data_parallel_rank} "
                 f"is out of range [0, {data_parallel_size})."
             )
-
+        #生成arrival_time(请求时间)
         if arrival_time is None:
             arrival_time = time.time()
-
-        # Optionally generate multimodal hash overrides to avoid hashing
+        #通常境况下，系统会对图片内容做哈希（md5或sha256）优点是如果2个请求都用了同一张图，系统直接复用。缺点就是多模态数据非常大，对巨大的二进制流做哈希计算非常耗CPU  。 如果用户把缓存都关了，意味着不会复用任何数据
+        # Optionally generate multimodal hash overrides to avoid hashing       可选择生成多模态哈希的替代表示，以避免通过其内容来对多模态数据项进行哈希作为标识
         # multimodal data items by their content as their identifiers.
 
-        # NOTE: when users explicitly turn off BOTH prefix caching and input
-        # processing caching, no multimodal features or embeddings will be
+        # NOTE: when users explicitly turn off BOTH prefix caching and input   当用户显式 关闭前缀缓存和输入处理缓存（针对图片、视频等非文本数据）的时候，多模态特征或其嵌入将不会在不同请求之间复用。
+        # processing caching, no multimodal features or embeddings will be     此时再通过内容来标识多模态数据就没有必要了，我们会改为使用"请求id + 模态类型 + 索引"组成的uuid作为多模态数据的替代标识。
         # reused across requests, therefore identifying multimodal data items
         # by their content is no longer necessary, and we create uuids with
         # request id-modality-index as multimodal hash overrides.
@@ -517,10 +523,10 @@ class InputProcessor:
                 )
             else:
                 mm_uuids = None
-
-        # Process inputs, which includes:
-        # 1. Tokenize text prompt, with LoRA request if one exists.
-        # 2. For multimodal models with a merged preprocessor, preprocess
+        #核心 预处理输入
+        # Process inputs, which includes:                                     处理输入包括：
+        # 1. Tokenize text prompt, with LoRA request if one exists.           1.对文本prompt进行分词
+        # 2. For multimodal models with a merged preprocessor, preprocess     2.对于带有合并预处理器的多模态模型，先对多模态数据进行预处理，并相应地扩展prompt的token id序列。
         #   multimodal data and expand prompt token ids accordingly.
         processed_inputs: ProcessorInputs = self.input_preprocessor.preprocess(
             prompt,
@@ -536,9 +542,9 @@ class InputProcessor:
         )
 
         eos_token_id = self.input_preprocessor.get_eos_token_id()
-
+        #分encoder / decoder
         encoder_inputs, decoder_inputs = split_enc_dec_inputs(processed_inputs)
-        self._validate_model_inputs(encoder_inputs, decoder_inputs)
+        self._validate_model_inputs(encoder_inputs, decoder_inputs) #把模型输入分为编码器和解码器部分
 
         # Mypy can be conservative for TypedDict unions; normalize access.
         if decoder_inputs["type"] == "embeds":
@@ -595,17 +601,17 @@ class InputProcessor:
                 )
 
         return EngineCoreRequest(
-            request_id=request_id,
-            prompt_token_ids=prompt_token_ids,
-            prompt_embeds=prompt_embeds,
-            mm_features=mm_features,
+            request_id=request_id,              #eg. None
+            prompt_token_ids=prompt_token_ids,  #eg.[151644, 872, 198, 108386, 6313, 100644, 104307, 104472, 11319, 151645, 198, 151644, 77091, 198]
+            prompt_embeds=prompt_embeds,        #eg. None
+            mm_features=mm_features,            #eg. None
             sampling_params=sampling_params,
-            pooling_params=pooling_params,
-            eos_token_id=eos_token_id,
-            arrival_time=arrival_time,
-            lora_request=lora_request,
-            cache_salt=decoder_inputs.get("cache_salt"),
-            priority=priority,
+            pooling_params=pooling_params,      #eg. None
+            eos_token_id=eos_token_id,          #eg. 151645
+            arrival_time=arrival_time,          #1774092543.0419767
+            lora_request=lora_request,          #eg. None
+            cache_salt=decoder_inputs.get("cache_salt"), #eg. None
+            priority=priority,                  #eg. None
             data_parallel_rank=data_parallel_rank,
             trace_headers=trace_headers,
         )

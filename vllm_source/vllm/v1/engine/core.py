@@ -347,32 +347,32 @@ class EngineCore:
         return callback
 
     def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
-        """Schedule, execute, and make output.
+        """Schedule, execute, and make output.                                  单步执行引擎核心逻辑
 
-        Returns tuple of outputs and a flag indicating whether the model
+        Returns tuple of outputs and a flag indicating whether the model        做了三件事：1.调度请求  2执行模型 3更新状态并产出结果
         was executed.
         """
 
-        # Check for any requests remaining in the scheduler - unfinished,
-        # or finished and not yet removed from the batch.
-        if not self.scheduler.has_requests():
+        # Check for any requests remaining in the scheduler - unfinished,        返回：1.engine_core_outputs:每个request id对应的输出（token/finished等）
+        # or finished and not yet removed from the batch.                             2.bool:本轮是否真的直行了模型（是否有token被调度）
+        if not self.scheduler.has_requests():   #没有任何任务，直接返回空
             return {}, False
-        scheduler_output = self.scheduler.schedule()
-        future = self.model_executor.execute_model(scheduler_output, non_block=True)
-        grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
+        scheduler_output = self.scheduler.schedule() #scheduler阶段：决定哪些请求进入本轮执行；每个请求分配多少token(prefill/decode)；batch如何组织（动态batching）
+        future = self.model_executor.execute_model(scheduler_output, non_block=True)#gpu_model_runner  #3.提交模型执行，non_block=True表示异步执行,不堵塞当前线程，返回一个future
+        grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output) #grammer/约束信息
         with self.log_error_detail(scheduler_output):
-            model_output = future.result()
-            if model_output is None:
+            model_output = future.result()         #等待GPU推理完成
+            if model_output is None:               #如果模型没有直接返回结果（某些优化路径）
                 model_output = self.model_executor.sample_tokens(grammar_output)
 
         # Before processing the model output, process any aborts that happened
         # during the model execution.
-        self._process_aborts_queue()
-        engine_core_outputs = self.scheduler.update_from_output(
+        self._process_aborts_queue()#处理中途取消的请求，在模型执行期间，可能有请求被用户取消
+        engine_core_outputs = self.scheduler.update_from_output( #更新调度器状态（核心），给每个request追加新token，判断是否finished ，更新kv cache状态，生成返回给上层的数据结构
             scheduler_output, model_output
         )
 
-        return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
+        return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0 #烦恼会结果，是否实际直行了token,有些步只是调度但是没跑模型
 
     def post_step(self, model_executed: bool) -> None:
         # When using async scheduling we can't get draft token ids in advance,
@@ -936,9 +936,9 @@ class EngineCoreProc(EngineCore):
         # Post-step hook.
         self.post_step(model_executed)
 
-        # If no model execution happened but there are waiting requests
-        # (e.g., WAITING_FOR_REMOTE_KVS), yield the GIL briefly to allow
-        # background threads (like NIXL handshake) to make progress.
+        # If no model execution happened but there are waiting requests  如果未发生模型执行，但仍有处于等待状态的请求（例如：正在等待远程 KV 缓存），
+        # (e.g., WAITING_FOR_REMOTE_KVS), yield the GIL briefly to allow  则短暂释放GIL，以允许后台线程（如NIXL握手协议）取得进展。如果不这么做
+        # background threads (like NIXL handshake) to make progress.      高频的轮询死循环可能会导致线程因资源匮乏而饿死
         # Without this, the tight polling loop can starve background threads.
         if not model_executed and self.scheduler.has_unfinished_requests():
             time.sleep(0.001)
@@ -953,7 +953,7 @@ class EngineCoreProc(EngineCore):
         if request_type == EngineCoreRequestType.ADD:
             req, request_wave = request
             self.add_request(req, request_wave)
-        elif request_type == EngineCoreRequestType.ABORT:
+        elif request_type == EngineCoreRequestType.ABORT: #这个直接crtl+c也能debug到
             self.abort_requests(request)
         elif request_type == EngineCoreRequestType.UTILITY:
             client_idx, call_id, method_name, args = request

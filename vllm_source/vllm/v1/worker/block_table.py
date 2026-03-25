@@ -12,7 +12,7 @@ from vllm.v1.utils import CpuGpuBuffer
 logger = init_logger(__name__)
 
 
-class BlockTable:
+class BlockTable: #vLLM管理kv cache的核心数据结构之一，可以把它理解为kv cache的页表
     def __init__(
         self,
         block_size: int,

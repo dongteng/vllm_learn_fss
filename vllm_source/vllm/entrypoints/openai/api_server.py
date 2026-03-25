@@ -508,7 +508,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
             message="The model does not support Chat Completions API"
         )
     try:
-        generator = await handler.create_chat_completion(request, raw_request)
+        generator = await handler.create_chat_completion(request, raw_request) #这行代码并没有立即完成对话，而是初始化了生成过程。它拿到了一个“句柄”（即 generator），后续代码通常会通过 async for 循环来逐个获取模型生成的 Token。
     except Exception as e:
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value, detail=str(e)

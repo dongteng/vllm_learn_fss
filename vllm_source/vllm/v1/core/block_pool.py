@@ -50,12 +50,17 @@ class BlockHashToBlockMap:
     block tables are append-only.
     NOTE #2: The union type is introduced in order to reduce GC costs
     from the inner dict.
+
+    用于前缀缓存的物理块缓存池。它直接将哈希值（hash）映射到1个或多个物理块：
+    通常情况下：block_hash映射到单个KVCacheBlock,此时KVCacheBlocks仅代表该物理块对象
+    其他情况下：KVCacheBlocks是一个字典，格式为{block_id: KVCacheBlock}
+
+    缓存块是指带有块哈希值的完整物理块，可用于前缀匹配。这些缓存块可能正被运行中的请求占用，也可能处于“空闲块队列（free_block_queue）”中，后者在空间不足时可能会被驱逐（Evicted）。
     """
 
     def __init__(self):
-        self._cache: dict[
-            BlockHashWithGroupId, KVCacheBlock | dict[int, KVCacheBlock]
-        ] = {}
+        #指明_cache是一个字典, key为BlockHashWithGroupId, value为KVCacheBlock或 字典
+        self._cache: dict[BlockHashWithGroupId, KVCacheBlock | dict[int, KVCacheBlock]] = {}
 
     def get_one_block(self, key: BlockHashWithGroupId) -> KVCacheBlock | None:
         """

@@ -135,7 +135,7 @@ class MsgpackEncoder:
 
     def encode(self, obj: Any) -> Sequence[bytestr]:
         try:
-            self.aux_buffers = bufs = [b""]
+            self.aux_buffers = bufs = [b""]                                     #创建一个列表
             bufs[0] = self.encoder.encode(obj)
             # This `bufs` list allows us to collect direct pointers to backing
             # buffers of tensors and np arrays, and return them along with the
@@ -441,10 +441,10 @@ def run_method(
     kwargs: dict[str, Any],
 ) -> Any:
     """
-    Run a method of an object with the given arguments and keyword arguments.
-    If the method is string, it will be converted to a method using getattr.
-    If the method is serialized bytes and will be deserialized using
-    cloudpickle.
+    Run a method of an object with the given arguments and keyword arguments.  使用给定的参数和关键字参数 执行对象的一个方法
+    If the method is string, it will be converted to a method using getattr.   如果方法是字符串，使用getattr将其转换为对应的成员方法
+    If the method is serialized bytes and will be deserialized using           如果方法是序列化后的字节流(bytes)，将使用cloudpickle进行反序列化
+    cloudpickle.                                                               如果方法本身是可调用对象 则直接调用
     If the method is a callable, it will be called directly.
     """
     if isinstance(method, bytes):

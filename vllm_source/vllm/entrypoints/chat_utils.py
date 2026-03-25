@@ -1828,7 +1828,7 @@ def apply_hf_chat_template(
             "allowed, so you must provide a chat template if the tokenizer "
             "does not define one."
         )
-
+    #resolved_kwargs  value eg.{'add_generation_prompt': True, 'continue_final_message': False, 'documents': None}
     resolved_kwargs = resolve_chat_template_kwargs(
         tokenizer=tokenizer,
         chat_template=hf_chat_template,

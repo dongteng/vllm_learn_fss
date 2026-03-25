@@ -36,7 +36,11 @@ BlockHash = NewType("BlockHash", bytes)
 # `BlockHashWithGroupId` combines a `BlockHash` with its KV cache group ID.
 # It is represented as raw bytes for compactness and efficiency. The helper
 # functions below pack/unpack the `BlockHash` and group id into/from the key.
-BlockHashWithGroupId = NewType("BlockHashWithGroupId", bytes)
+# `BlockHashWithGroupId` 将 `BlockHash` 与其对应的 KV cache 分组 ID 组合在一起。
+# 为了紧凑和高效率，它被表示为原始字节形式。
+# 下面的辅助函数用于将 `BlockHash` 和 group id 打包/解包到/从该 key 中。
+
+BlockHashWithGroupId = NewType("BlockHashWithGroupId", bytes) ##基于bytes类型，创建一个名为BlockHashWithGroupId的新类型，用于表示带有KV缓存组ID的块哈希值。
 
 # ExternalBlockHash is used for reproducible prefix-cache block hashing.
 # It's a union of `bytes` and `int` to keep backward compatibility
@@ -47,10 +51,10 @@ ExternalBlockHash: TypeAlias = bytes | int
 def make_block_hash_with_group_id(
     block_hash: BlockHash, group_id: int
 ) -> BlockHashWithGroupId:
-    """Pack a `BlockHash` and group id into a `BlockHashWithGroupId`.
+    """Pack a `BlockHash` and group id into a `BlockHashWithGroupId`. 将 BlockHash 和 group id 打包成一个 BlockHashWithGroupId
 
-    The group id is encoded using 4 bytes in big-endian order and appended to
-    the block hash bytes.  This representation avoids creating tuples while
+    The group id is encoded using 4 bytes in big-endian order and appended to  #group id 使用 **4 个字节（big-endian，大端序）**进行编码，并追加到 block hash 的字节后面。
+    the block hash bytes.  This representation avoids creating tuples while   #这种表示方式可以 避免创建 tuple（元组）对象，同时在需要的时候仍然可以  恢复出这两个部分的数据。
     still allowing us to recover both components when needed.
     """
     return BlockHashWithGroupId(block_hash + group_id.to_bytes(4, "big", signed=False))
@@ -113,12 +117,12 @@ class KVCacheBlock:
     # Reference count.
     ref_cnt: int = 0
     # The hash key (block hash + group id) of the block, only available
-    # when the block is full and cached.
+    # when the block is full and cached.   #意思是 只有在block已经填满并被缓存时 才存在。
     _block_hash: BlockHashWithGroupId | None = None
 
-    # Used to construct a doubly linked list for free blocks.
-    # These two attributes should only be manipulated by FreeKVCacheBlockQueue.
-    prev_free_block: "KVCacheBlock | None" = None
+    # Used to construct a doubly linked list for free blocks. #用于构建一个空闲block的双向链表
+    # These two attributes should only be manipulated by FreeKVCacheBlockQueue. #这两个属性只应该由FreeKVCacheBlockQueue来操作
+    prev_free_block: "KVCacheBlock | None" = None  #为啥要有这两个字段是因为如果不使用，复杂度会很高
     next_free_block: "KVCacheBlock | None" = None
 
     # Whether the block is a null block that should never be cached.
@@ -154,18 +158,18 @@ class KVCacheBlock:
 
 
 class FreeKVCacheBlockQueue:
-    """This class organizes a list of KVCacheBlock objects to a doubly linked
-    list of free blocks. We implement this class instead of using Python
+    """This class organizes a list of KVCacheBlock objects to a doubly linked  #这个类将一组 KVCacheBlock 对象组织成一个 空闲 block 的双向链表
+    list of free blocks. We implement this class instead of using Python  #我们实现这个类，而不是使用 Python 内置的 deque，是为了支持 在队列中间删除某个 block，并且时间复杂度为 O(1)。
     builtin deque to support removing a block in the middle of the queue
     in O(1) time. To close the performance gap to the builtin deque which is
-    implemented in C++, this class does not allocate any Python objects when
+    implemented in C++, this class does not allocate any Python objects when #为了缩小与用 C++ 实现的内置 deque 之间的性能差距，这个类在操作链表时 不会创建任何新的 Python 对象。
     manipulating the linked list. Instead, this class manipulates the
     prev_free_block and next_free_block attributes of the given blocks.
 
-    The queue is ordered by block ID in the beginning. When a block is allocated
+    The queue is ordered by block ID in the beginning. When a block is allocated ##在初始化时，这个队列是 按照 block_id 排序的。
     and then freed, it will be appended back with the eviction order:
-    1. The least recent used block is at the front (LRU).
-    2. If two blocks have the same last accessed time (allocated by the
+    1. The least recent used block is at the front (LRU).                        #最近最少使用的 block 在队列最前面（LRU）
+    2. If two blocks have the same last accessed time (allocated by the          #如果两个 block 的最后访问时间相同（例如来自同一个 sequence），那么 拥有更多 hash token 的 block（block chain 的尾部）会排在前面。
        same sequence), the one with more hash tokens (the tail of a block
        chain) is at the front.
     Note that we maintain this order by reversing the block order when free
@@ -175,7 +179,7 @@ class FreeKVCacheBlockQueue:
         blocks: A list of KVCacheBlock objects.
     """
 
-    def __init__(self, blocks: list[KVCacheBlock]) -> None:
+    def __init__(self, blocks: list[KVCacheBlock]) -> None: #init里边总的来说  把所有空闲的kv cache block组成一个双向链表，在链表头上加上假头 假尾
         self.num_free_blocks = len(blocks)
 
         # Initialize doubly links of consecutive blocks
@@ -192,7 +196,7 @@ class FreeKVCacheBlockQueue:
         # are NEVER got popped, so we could safely assume each real blocks
         # in the queue has prev and next blocks.
         self.fake_free_list_head = KVCacheBlock(block_id=-1)
-        self.fake_free_list_tail = KVCacheBlock(block_id=-1)
+        self.fake_free_list_tail = KVCacheBlock(block_id=-1) #结构变成：fake_head ⇄ block0 ⇄ block1 ⇄ block2 ⇄ block3 ⇄ fake_tail
         if self.num_free_blocks > 0:
             # Connect fake_head and fake_tail to the first and last block
             # respectively.
@@ -201,13 +205,13 @@ class FreeKVCacheBlockQueue:
             self.fake_free_list_tail.prev_free_block = blocks[-1]
             blocks[-1].next_free_block = self.fake_free_list_tail
         else:
-            # For empty list, simply connect the fake head and tail.
+            # For empty list, simply connect the fake head and tail.#如果block数量是0，就直接连接：fake_head ⇄ fake_tail 表示空链表
             self.fake_free_list_head.next_free_block = self.fake_free_list_tail
             self.fake_free_list_tail.prev_free_block = self.fake_free_list_head
 
     def popleft(self) -> KVCacheBlock:
         """Pop the first free block and reduce num_free_blocks by 1.
-
+        从空闲block队列的最前面取出一个block,同时从链表中移除这个block, 空闲block数量减一。
         Returns:
             The first free block.
         """
@@ -219,11 +223,11 @@ class FreeKVCacheBlockQueue:
                 f"num_free_blocks ({self.num_free_blocks}) is out of sync "
                 "with the free list."
             )
-            raise ValueError("No free blocks available")
+            raise ValueError("No free blocks available") #如果空闲block数量为0，就抛出异常，最终报错，没有可用的KV block
 
-        first_block: KVCacheBlock = self.fake_free_list_head.next_free_block
+        first_block: KVCacheBlock = self.fake_free_list_head.next_free_block  #找到第一个Block
 
-        if first_block.next_free_block is None:
+        if first_block.next_free_block is None: #检查first_block是否有next_block， 如果没有：说明链表结构被破坏了。
             # This should not happen if the block is from the free list.
             # It indicates a bug in the caller's logic.
             raise RuntimeError(
@@ -231,7 +235,7 @@ class FreeKVCacheBlockQueue:
                 "which doesn't have a valid next_free_block"
             )
 
-        # Connect fake_head and the next block of first_block (i.e. second block
+        # Connect fake_head and the next block of first_block (i.e. second block  #从链表中移除这个block
         # or fake tail).
         self.fake_free_list_head.next_free_block = first_block.next_free_block
         first_block.next_free_block.prev_free_block = self.fake_free_list_head
@@ -276,7 +280,7 @@ class FreeKVCacheBlockQueue:
         return ret
 
     def remove(self, block: KVCacheBlock) -> None:
-        """Remove a block in the free list and reduce num_free_blocks by 1.
+        """Remove a block in the free list and reduce num_free_blocks by 1.  删除指定的Block
 
         Args:
             block: The block to remove.
@@ -295,7 +299,7 @@ class FreeKVCacheBlockQueue:
         block.prev_free_block = block.next_free_block = None
         self.num_free_blocks -= 1
 
-    def append(self, block: KVCacheBlock) -> None:
+    def append(self, block: KVCacheBlock) -> None: #把一个block放回free block链表末尾，同时把空闲block数量+1
         """Put a block back into the free list and increase
         num_free_blocks by 1.
 
@@ -305,7 +309,7 @@ class FreeKVCacheBlockQueue:
         if self.fake_free_list_tail.prev_free_block is None:
             raise RuntimeError(
                 "prev_free_block of fake_free_list_tail should always exist"
-            )
+            ) #在这个双向链表设计里，fake_free_list_tail（假尾节点）的 prev_free_block 理论上永远不应该是 None。原因是初始化时链表一定会被连起来
         last_block: KVCacheBlock = self.fake_free_list_tail.prev_free_block
 
         # Connect the new block after the last block.
@@ -347,7 +351,7 @@ class FreeKVCacheBlockQueue:
         """Get all free blocks in the free list. Mainly used for testing.
 
         Returns:
-            A list of free blocks.
+            A list of free blocks. #遍历整个双向列表，把所有空闲Block收集，主要用于测试或者调试，正常的调度逻辑基本不会用到
         """
         ret = []
         if self.fake_free_list_head.next_free_block is None:
@@ -366,10 +370,10 @@ class FreeKVCacheBlockQueue:
 
 def need_extra_keys(request: Request) -> bool:
     """Check whether the blocks allocated to this request need extra hash keys.
-
+    用来回答一个问题：给这个request分配kv block时，block的hash key需不需要额外信息？
+    kv cache复用依赖block hash， 如果请求是 多模态（比如图片 + 文本）即使token一样，图片可能不一。
     Args:
         request (Request): The request.
-
     Returns:
         bool: Whether blocks allocated to this request need extra hash keys.
     """
@@ -384,7 +388,7 @@ def need_extra_keys(request: Request) -> bool:
     )
 
 
-def _gen_mm_extra_hash_keys(
+def _gen_mm_extra_hash_keys( #为包含多模态输入的 request 生成额外的 hash key，用于 KV block 的 hash 计算
     request: Request, start_token_idx: int, end_token_idx: int, start_mm_idx: int
 ) -> tuple[list[Any], int]:
     """Generate extra keys related to MultiModal request for block hash
@@ -467,7 +471,7 @@ def _gen_prompt_embeds_extra_hash_keys(
     request: Request, start_token_idx: int, end_token_idx: int
 ) -> list[bytes]:
     """Generate extra keys related to prompt embeds for block hash computation.
-
+    在 vLLM 中，KV cache 的复用依赖 block hash。如果两个 block 的 hash 相同，就认为它们的 KV cache 可以复用。但有一种特殊情况：用户直接传入 prompt embeddings，而不是 token。这时仅靠 token 已经无法判断两个 block 是否相同，所以必须把 embedding 数据也纳入 hash。
     Args:
         request: The request object.
         start_token_idx: The start token index of the block.
@@ -484,7 +488,7 @@ def _gen_prompt_embeds_extra_hash_keys(
     return [embeds_bytes]
 
 
-def generate_block_hash_extra_keys(
+def generate_block_hash_extra_keys(#用来为 KV block 收集所有可能影响 cache 复用的额外信息，包括 multimodal identifier、LoRA 名称、cache salt 和 prompt embeddings 数据。
     request: Request, start_token_idx: int, end_token_idx: int, start_mm_idx: int
 ) -> tuple[tuple[Any, ...] | None, int]:
     """Generate extra keys for the block hash. The extra keys can come from
@@ -522,22 +526,22 @@ def generate_block_hash_extra_keys(
     return tuple(extra_keys), new_start_mm_idx
 
 
-def hash_block_tokens(
+def hash_block_tokens( #计算一个 KV block 的 hash，用于 prefix cache 复用。
     hash_function: Callable[[Any], bytes],
     parent_block_hash: BlockHash | None,
     curr_block_token_ids: Sequence[int],
     extra_keys: tuple[Any, ...] | None = None,
-) -> BlockHash:
+) -> BlockHash: #
     """Computes a hash value corresponding to the contents of a block and
     the contents of the preceding block(s). The hash value is used for
     prefix caching. We use LRU cache for this function to avoid recomputing
     hash values for the same block contents.
     Args:
-        hash_function: The hash function used to compute block hash.
-        parent_block_hash: The hash of the parent block. None
+        hash_function: The hash function used to compute block hash.  用来计算hash的函数 如ssa1,xxhash等
+        parent_block_hash: The hash of the parent block. None         前一个block的hash
             if this is the first block.
-        curr_block_token_ids: A list of token ids in the current
-            block. The current block is assumed to be full.
+        curr_block_token_ids: A list of token ids in the current      当前block里的token id序列
+            block. The current block is assumed to be full.           额外信息
         extra_keys: Extra keys for the block.
     Returns:
         The hash value of the block and the token ids in the block.
@@ -546,13 +550,13 @@ def hash_block_tokens(
     if not parent_block_hash:
         parent_block_hash = NONE_HASH
 
-    curr_block_token_ids_tuple = tuple(curr_block_token_ids)
+    curr_block_token_ids_tuple = tuple(curr_block_token_ids)         #Python 的 list 是 不可 hash 的，而 tuple 是 不可变且可 hash 的。
     return BlockHash(
         hash_function((parent_block_hash, curr_block_token_ids_tuple, extra_keys))
     )
 
 
-def get_request_block_hasher(
+def get_request_block_hasher(  #生成一个函数，用来计算某个request新产生的kv block的hash列表。
     block_size: int,
     caching_hash_fn: Callable[[Any], bytes],
 ) -> Callable[[Request], list[BlockHash]]:
@@ -606,7 +610,7 @@ def get_request_block_hasher(
     return request_block_hasher
 
 
-def _check_enough_kv_cache_memory(
+def _check_enough_kv_cache_memory( #检查当前 GPU 预留给 KV cache 的内存，是否足够支持模型的最大序列长度。
     available_memory: int,
     get_needed_memory: Callable[[], int],
     max_model_len: int,
@@ -620,10 +624,10 @@ def _check_enough_kv_cache_memory(
             "for more details."
         )
 
-    needed_memory = get_needed_memory()
-
-    if needed_memory > available_memory:
-        estimated_max_len = estimate_max_model_len(available_memory)
+    needed_memory = get_needed_memory() #计算真正需要的kv cache内存， 这个值取决于hidden_size  num_layers  kv_dtype max_model_len
+    #简单理解：max_model_len越大，需要的kv cache越多
+    if needed_memory > available_memory:  #如果需要的 KV cache 内存 大于可用内存，说明当前配置无法支持最大序列长度。
+        estimated_max_len = estimate_max_model_len(available_memory) #根据当前可用内存，估算：最多可以支持多少token
         estimated_msg = ""
         if estimated_max_len > 0:
             estimated_msg = (
@@ -646,7 +650,7 @@ def _check_enough_kv_cache_memory(
 def max_memory_usage_bytes(
     vllm_config: VllmConfig, kv_cache_specs: Iterable[KVCacheSpec]
 ) -> int:
-    """
+    """ 计算一组kv cache配置在最坏情况下会占用多少GPU显存
     Get the maximum memory usage in bytes for the given KV cache specs.
     """
     return sum(spec.max_memory_usage_bytes(vllm_config) for spec in kv_cache_specs)
@@ -741,7 +745,7 @@ def create_kv_cache_group_specs(
     Create KVCacheGroupSpec object for each kv cache group layer.
     The layers in the same group should share the same
     KVCacheSpec.
-
+    根据 layer 分组信息，把多个 layer 的 KVCacheSpec 合并成 group 级别的 KVCacheSpec，并生成对应的 KVCacheGroupSpec。这样同一组的 attention layer 可以共享同一种 KV cache 结构配置。
     Args:
         kv_cache_spec:
             A mapping from each layer name to its corresponding KVCacheSpec.
@@ -765,7 +769,7 @@ def create_kv_cache_group_specs(
 
 
 def is_kv_cache_spec_uniform(kv_cache_spec: dict[str, KVCacheSpec]) -> bool:
-    """
+    """ 用于判断 模型所有 attention 层的 KV cache 规格是否一致。KVCacheSpec 本质上是：描述“某一层 KV cache 如何存储”的规格说明。
     Whether all layers in the given KVCacheSpec have the same KV cache spec.
     Note that we regard FullAttentionSpec with and without sliding window as
     the same type.
@@ -793,25 +797,26 @@ def get_max_concurrency_for_kv_cache_config(
     vllm_config: VllmConfig, kv_cache_config: KVCacheConfig
 ) -> float:
     """
-    Get the maximum concurrency for the given KV cache configuration.
+    Get the maximum concurrency for the given KV cache configuration.根据 KV cache 的配置，估算 GPU 最多能同时跑多少个请求（并发数）。
     """
-    num_layer_per_group = max(
+    num_layer_per_group = max( #一个 KV cache group 里最多有多少层。
         len(group.layer_names) for group in kv_cache_config.kv_cache_groups
-    )
-    max_memory_usage_per_request = num_layer_per_group * max_memory_usage_bytes(
+    )#
+    max_memory_usage_per_request = num_layer_per_group * max_memory_usage_bytes(  #一个请求最多会占用多少 KV cache 内存。如果一个请求跑到 max_model_len，它会占多少 KV cache。
         vllm_config, (group.kv_cache_spec for group in kv_cache_config.kv_cache_groups)
     )
-    memory_per_block = (
+    memory_per_block = ( #一个 KV block 在所有层上的总大小。
         kv_cache_config.kv_cache_groups[0].kv_cache_spec.page_size_bytes
         * num_layer_per_group
     )
-    num_block_per_request = cdiv(max_memory_usage_per_request, memory_per_block)
+    num_block_per_request = cdiv(max_memory_usage_per_request, memory_per_block) #一个请求最多需要多少个 block。
     max_concurrency = kv_cache_config.num_blocks / num_block_per_request
     return max_concurrency
 
 
 def may_override_num_blocks(vllm_config: VllmConfig, num_blocks: int) -> int:
-    """
+    """如果配置里设置了 num_gpu_blocks_override，就用它来 覆盖原本计算得到的 KV cache block 数量。
+    换句话说：允许用户手动指定 KV cache block 数量，而不是使用系统自动计算的值。
     Override the number of kv cache blocks if `num_gpu_blocks_override` is set.
     """
     if vllm_config.cache_config.num_gpu_blocks_override is not None:
@@ -830,13 +835,13 @@ def get_num_blocks(
     vllm_config: VllmConfig, num_layers: int, available_memory: int, page_size: int
 ) -> int:
     """
-    Get the number of kv cache blocks.
+    Get the number of kv cache blocks.  计算 KV cache 可以创建多少个 block。
 
     Args:
         vllm_config: The global VllmConfig
         num_layers: The number of layers
-        available_memory: Memory available for KV cache in bytes.
-        page_size: The page size of the KV cache.
+        available_memory: Memory available for KV cache in bytes. 可用于 KV cache 的 GPU 内存（单位：bytes）。
+        page_size: The page size of the KV cache.    KV cache 中 一个 block 在单层上的大小（bytes）
     """
     num_blocks = int(available_memory // page_size // num_layers)
     num_blocks = max(num_blocks, 0)
@@ -846,7 +851,7 @@ def get_num_blocks(
 
 def get_uniform_page_size(kv_cache_specs: Iterable[KVCacheSpec]) -> int:
     """
-    Get the page size of the KV cache.
+    Get the page size of the KV cache. 获取kv cache的page size(block大小)
     """
     page_sizes = {layer.page_size_bytes for layer in kv_cache_specs}
     assert len(page_sizes) == 1
