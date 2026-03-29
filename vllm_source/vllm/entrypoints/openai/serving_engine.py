@@ -292,7 +292,7 @@ class OpenAIServing:
     ) -> Callable[[TokenizerLike], ReasoningParser] | None:
         """Get the reasoning parser based on the name."""
         parser = None
-        if not reasoning_parser_name or reasoning_parser_name == Ellipsis:
+        if (not reasoning_parser_name) or (reasoning_parser_name == Ellipsis):
             return None
         try:
             parser = ReasoningParserManager.get_reasoning_parser(reasoning_parser_name)
