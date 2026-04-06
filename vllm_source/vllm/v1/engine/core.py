@@ -358,12 +358,12 @@ class EngineCore:
         if not self.scheduler.has_requests():   #没有任何任务，直接返回空
             return {}, False
         scheduler_output = self.scheduler.schedule() #scheduler阶段：决定哪些请求进入本轮执行；每个请求分配多少token(prefill/decode)；batch如何组织（动态batching）
-        future = self.model_executor.execute_model(scheduler_output, non_block=True)#gpu_model_runner  #3.提交模型执行，non_block=True表示异步执行,不堵塞当前线程，返回一个future
+        future = self.model_executor.execute_model(scheduler_output, non_block=True)#gpu_model_runner  #3.提交模型执行，non_block=True表示异步执行,不堵塞当前线程，返回一个future，提交后就开始执行了
         grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output) #grammer/约束信息
         with self.log_error_detail(scheduler_output):
-            model_output = future.result()         #等待GPU推理完成
-            if model_output is None:               #如果模型没有直接返回结果（某些优化路径）
-                model_output = self.model_executor.sample_tokens(grammar_output)
+            model_output = future.result()         #阻塞等待等待GPU推理完成
+            if model_output is None:               #就是说如果返回一个完整的ModelRunnerOutput，里边已经包含了采样后的token
+                model_output = self.model_executor.sample_tokens(grammar_output) #高性能优化场景下，excute_model故意只做前向计算，不做sampling，此时就会返回None
 
         # Before processing the model output, process any aborts that happened
         # during the model execution.
@@ -889,7 +889,7 @@ class EngineCoreProc(EngineCore):
         pass
 
     def run_busy_loop(self):
-        """Core busy loop of the EngineCore."""
+        """Core busy loop of the EngineCore.EngineCore的核心循环 它负责不断地接受请求-执行推理-输出结果，是整个异步引擎的驱动器"""
 
         # Loop until process is sent a SIGINT or SIGTERM
         while True:
@@ -926,15 +926,15 @@ class EngineCoreProc(EngineCore):
             self._handle_client_request(*req)
 
     def _process_engine_step(self) -> bool:
-        """Called only when there are unfinished local requests."""
+        """Called only when there are unfinished local requests.执行engine的单步处理  该函数仅在未完成的本地请求时才会被调用"""
 
-        # Step the engine core.
-        outputs, model_executed = self.step_fn()
-        # Put EngineCoreOutputs into the output queue.
+        # Step the engine core. 调用Engine Core的核心step哈桑农户，执行一次调度+模型推理，返回2个值  outputs: 本次 step 产生的输出结果（dict，key 为 request_id）
+        outputs, model_executed = self.step_fn() #model_executed: 本次 step 是否真正执行了模型 forward（即是否发生了 GPU 计算）
+        # Put EngineCoreOutputs into the output queue. 将本次生成的输出结果放入输出队列，供上层（AsyncLLMEngine 或用户调用）消费
         for output in outputs.items() if outputs else ():
-            self.output_queue.put_nowait(output)
+            self.output_queue.put_nowait(output) #使用put_nowait，非阻塞方式放入输出队列
         # Post-step hook.
-        self.post_step(model_executed)
+        self.post_step(model_executed) #执行step完成后的钩子函数，通常用于清理、统计更新、日志记录等后处理工作
 
         # If no model execution happened but there are waiting requests  如果未发生模型执行，但仍有处于等待状态的请求（例如：正在等待远程 KV 缓存），
         # (e.g., WAITING_FOR_REMOTE_KVS), yield the GIL briefly to allow  则短暂释放GIL，以允许后台线程（如NIXL握手协议）取得进展。如果不这么做

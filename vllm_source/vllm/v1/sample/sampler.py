@@ -86,7 +86,7 @@ class Sampler(nn.Module):
                 else:
                     raw_logprobs = logits.to(torch.float32)
 
-        # Use float32 for the logits.
+        # Use float32 for the logits.       #这里从fp16到了32？
         logits = logits.to(torch.float32)
 
         logits = self.apply_logits_processors(
@@ -96,10 +96,10 @@ class Sampler(nn.Module):
         sampled, processed_logprobs = self.sample(logits, sampling_metadata)
         if processed_logprobs is not None:
             raw_logprobs = processed_logprobs
-        # Convert sampled token ids to int64 (long) type to ensure compatibility
-        # with subsequent operations that may use these values as indices.
-        # This conversion is necessary because FlashInfer sampling operations
-        # return int32 (while PyTorch argmax and topk return int64).
+        # Convert sampled token ids to int64 (long) type to ensure compatibility    将采样得到的token ids转换为int64(long)类型，确保后续操作（如用用作索引）时的兼容性
+        # with subsequent operations that may use these values as indices.          之所以需要这个类型转换，是因为：
+        # This conversion is necessary because FlashInfer sampling operations       flashinfer的采样操作返回的是int32
+        # return int32 (while PyTorch argmax and topk return int64).                而pytorch原生的argmax和topk操作返回的是int64
         sampled = sampled.long()
 
         if num_logprobs is None:

@@ -294,20 +294,27 @@ M = TypeVar("M")
 
 
 class AttentionCGSupport(enum.Enum):
-    """Constants for the cudagraph support of the attention backend
+    """Constants for the cudagraph support of the attention backend             注意力后端（Attention Backend）对 CUDA Graph 的支持程度枚举。
     Here we do not consider the cascade attention, as currently
-    it is never cudagraph supported."""
-
+    it is never cudagraph supported.
+    """
     ALWAYS = 3
-    """Cudagraph always supported; supports mixed-prefill-decode"""
+    """Cudagraph always supported; supports mixed-prefill-decode
+    始终支持CUDA Graph（最高级别）支持混合 prefill + decode 批次（mixed-prefill-decode）这是最理想的情况，绝大多数现代 FlashAttention / FlashInfer 后端都争取达到这个级别。
+    """
     UNIFORM_BATCH = 2
-    """Cudagraph supported for batches the only contain query lengths that are
-    the same, this can be used for spec-decode
-        i.e. "decodes" are 1 + num_speculative_tokens"""
+    """Cudagraph supported for batches the only contain query lengths that are    支持均匀批次下的CUDA Graph，即批次中所有请求的query length（查询长度）必须完全相同
+    the same, this can be used for spec-decode                                        
+        i.e. "decodes" are 1 + num_speculative_tokens
+    
+    """
     UNIFORM_SINGLE_TOKEN_DECODE = 1
-    """Cudagraph supported for batches the only contain query_len==1 decodes"""
+    """Cudagraph supported for batches the only contain query_len==1 decodes
+    仅支持单 token decode 的 Uniform CUDA Graph（较弱支持） 仅当批次中所有请求的 query_len == 1（纯 decode，且每个请求只生成 1 个 token）时支持。这通常是较老或功能较受限的后端所能达到的级别。
+    """
     NEVER = 0
-    """NO cudagraph support"""
+    """NO cudagraph support完全不支持 CUDA Graph（最低级别）
+    该后端无法使用 CUDA Graph，只能走 eager 执行模式，性能相对较差。"""
 
 
 class AttentionMetadataBuilder(abc.ABC, Generic[M]):
@@ -1213,9 +1220,9 @@ def get_dcp_local_seq_lens(
     dcp_rank: int | None = None,
     cp_kv_cache_interleave_size: int = 1,
 ) -> torch.Tensor:
-    """While using dcp, kv_cache size stored on each rank may be different,
-    use this function to calculate split decode seq_lens of each dcp rank.
-    Only consider dcp now, we can extend the case of cp based on this.
+    """While using dcp, kv_cache size stored on each rank may be different,  在启用DCP时，每个DCP rank本地应该负责的序列长度（local seq lens）
+    use this function to calculate split decode seq_lens of each dcp rank.    由于kv cache在不同rank之间是切分存储的，每个rank上实际存储的kv cache大小不同，因此需要通过这个函数计算出当前rank在decode阶段应该处理的本地序列长度
+    Only consider dcp now, we can extend the case of cp based on this.        注意，目前主要支持DCP，未来可基于此扩展Context Parallel（CP）的情况
     """
     num_requests = seq_lens.size(0)
     if dcp_rank is None:

@@ -951,36 +951,36 @@ class Scheduler(SchedulerInterface):
         # Put the request back to the waiting queue.
         self.waiting.prepend_request(request)
 
-    def _update_after_schedule(
+    def _update_after_schedule(         #本次调度结束后，更新请求的内部状态。这是scheduler完成一轮调度后的收尾工作
         self,
         scheduler_output: SchedulerOutput,
     ) -> None:
-        # Advance the number of computed tokens for the request AFTER
-        # the request is scheduled.
+        # Advance the number of computed tokens for the request AFTER                #为什么要在调度完成后才更新num_computed_tokens?原因有3点：
+        # the request is scheduled.                                                  1.当前步骤生成的scheduler_output必须使用调度前的num_computed_tokens以便正确构造input_ids（模型输入）
         # 1. The scheduler_output of the current step has to include the
         #    original number of scheduled tokens to determine input IDs.
-        # 2. Advance the number of computed tokens here allowing us to
+        # 2. Advance the number of computed tokens here allowing us to               2.在这里提前num_computed_tokens，可以让同一个prefill请求在下一轮调度室，立即被识别为已经计算过部分token,从而支持连续调度（尤其是chunked prefill）
         #    schedule the prefill request again immediately in the next
         #    scheduling step.
-        # 3. If some tokens (e.g. spec tokens) are rejected later, the number of
+        # 3. If some tokens (e.g. spec tokens) are rejected later, the number of     3.如果后续执行阶段发现某些token数被reject（例如投机解码中draft token被拒绝）会在update_from_output中再对num_computed_tokens进行修正
         #    computed tokens will be adjusted in update_from_output.
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         for req_id, num_scheduled_token in num_scheduled_tokens.items():
             request = self.requests[req_id]
             request.num_computed_tokens += num_scheduled_token
 
-            # NOTE: _free_encoder_inputs relies on num_computed_tokens, which
-            # may be updated again in _update_from_output for speculative
-            # decoding. However, it is safe to call the method here because
-            # encoder inputs are always part of the prompt, not the output,
+            # NOTE: _free_encoder_inputs relies on num_computed_tokens, which        如果该请求带有 Encoder 输入（Encoder-Decoder 模型或多模态模型），
+            # may be updated again in _update_from_output for speculative            则尝试释放 Encoder 输入占用的 cache。
+            # decoding. However, it is safe to call the method here because          Encoder 输入属于 prompt 的一部分，不受 speculative decoding 影响，
+            # encoder inputs are always part of the prompt, not the output,          所以在这里提前释放是安全的。
             # and thus are unaffected by speculative decoding.
             if request.has_encoder_inputs:
                 self._free_encoder_inputs(request)
 
-        # Clear the finished request IDs.
-        # NOTE: We shouldn't do self.finished_req_ids.clear() here because
-        # it will also affect the scheduler output.
-        self.finished_req_ids = set()
+        # Clear the finished request IDs.                                            清空已经完成请求ID的集合
+        # NOTE: We shouldn't do self.finished_req_ids.clear() here because           注意：不能直接使用 self.finished_req_ids.clear()，因为 scheduler_output 中引用了当前的 finished_req_ids（浅引用），
+        # it will also affect the scheduler output.                                  清空会导致 scheduler_output 中的 finished_req_ids 也被清空，破坏已构造好的输出结果
+        self.finished_req_ids = set()                                                #因此采用重新赋值空 set 的方式来清空。
 
     def _make_cached_request_data(
         self,

@@ -127,7 +127,7 @@ class CpuGpuBuffer:
             self.np = self.cpu.numpy()
 
     def copy_to_gpu(self, n: int | None = None) -> torch.Tensor:
-        if n is None:
+        if n is None:                                                   #将CPU上的数据异步拷贝到对应的GPU张两种，这是一个常用的辅助函数，用于把在CPU上准备好的数据快速传输到GPU
             return self.gpu.copy_(self.cpu, non_blocking=True)
         return self.gpu[:n].copy_(self.cpu[:n], non_blocking=True)
 

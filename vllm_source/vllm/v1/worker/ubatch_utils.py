@@ -58,7 +58,7 @@ def _pad_out_ubatch_slices(
     ]
 
 
-def maybe_create_ubatch_slices(
+def maybe_create_ubatch_slices(#如果需要进行微批处理（Microbatching / UBatch），则将当前大 batch 切分成多个小的 ubatch。
     should_ubatch: bool,
     num_scheduled_tokens: np.ndarray,
     num_tokens_padded: int,
