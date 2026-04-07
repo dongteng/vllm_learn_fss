@@ -40,6 +40,7 @@ def bc_linter_include(*, reason: str | None = ...) -> Callable[[T], T]: ...
 
 def bc_linter_include(obj: Any = None, *, reason: str | None = None):
     """
+    不是功能性装饰器，而是一个给静态检查工具看的标记，用来显式声明“这个是合法的公开 API”，避免向后兼容性检查器误报。
     Usage:
         @bc_linter_include
         def public_api(...): ...

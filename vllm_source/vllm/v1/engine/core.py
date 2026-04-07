@@ -932,7 +932,7 @@ class EngineCoreProc(EngineCore):
         outputs, model_executed = self.step_fn() #model_executed: 本次 step 是否真正执行了模型 forward（即是否发生了 GPU 计算）
         # Put EngineCoreOutputs into the output queue. 将本次生成的输出结果放入输出队列，供上层（AsyncLLMEngine 或用户调用）消费
         for output in outputs.items() if outputs else ():
-            self.output_queue.put_nowait(output) #使用put_nowait，非阻塞方式放入输出队列
+            self.output_queue.put_nowait(output) #使用put_nowait，非阻塞方式放入输出队列  流式的话这里放进去 终端就收到了
         # Post-step hook.
         self.post_step(model_executed) #执行step完成后的钩子函数，通常用于清理、统计更新、日志记录等后处理工作
 

@@ -779,19 +779,23 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         torch.cuda.synchronize() #等待当前GPU上所有操作执行完成
 
     def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
-        """Update the cached states and the persistent batch with the scheduler
-        output. 根据scheduler的输出，更新缓存状态（cached states）以及之旧话batch(persistent batch)
-
-        The updated states are used by the `_prepare_inputs` function to create
-        the input GPU tensors for the model. 更新后的状态会被_prepare_inputs函数使用，用来构造模型所需的GPU输入张量
-
-        The SamplingMetadata is updated and copied to the GPU if there is a
-        new/resumed/paused/finished request in the batch.  如果batch中存在新增、恢复、暂停、完成的请求，那么会更新SamplingMetadata，并将其拷贝到GPU
         """
-        # Remove finished requests from the cached states.
+        Update the cached states and the persistent batch with the scheduler output. The updated states are used by the `_prepare_inputs` function to createthe input GPU tensors for the model.
+        The SamplingMetadata is updated and copied to the GPU if there is a new/resumed/paused/finished request in the batch.
+        根据Scheduler本次调度输出的scheduler_output，同步更新ModelRunner内部的2种状态：
+        1.Cached states(self.requests)：每个请求的缓存状态（已计算token数 、 output_token_ids、block_ids、采样参数等）
+        2.persist batch(self.batch)：持久化的batch数据结构，用于快速构造下一次模型输入张量（input_ids、black_table等）
+        更新后的状态会被后续的_prepare_inputs使用，来构建本次forward所需的GPU张量。
+        此外，它还负责处理请求的生命周期：新增请求、恢复被抢占的请求、移除已完成/被抢占的请求、更新 speculative decoding 相关信息等
+        这是 vLLM v1 持久化 batch 优化（persistent batch optimization）的核心支撑，让连续 batch 之间请求重叠度高时能高效复用状态，减少开销。
+        """
+
+        #1. 移除已经完成的请求 Remove finished requests from the cached states.
         for req_id in scheduler_output.finished_req_ids:
             self.requests.pop(req_id, None)
             self.num_prompt_logprobs.pop(req_id, None)
+
+        #2.从persistent batch种移除已完成请求
         # Remove the finished requests from the persistent batch.                   #从持久化batch中 移除已经完成的请求
         # NOTE(woosuk): There could be an edge case where finished_req_ids and      #注意woosuk：存在一种边界情况：finished_req_ids 和 scheduled_req_ids 可能会有重叠。
         # scheduled_req_ids overlap. This happens when a request is aborted and     #这种情况发生在：某个请求被中止（aborted），然后又用相同的 ID 重新提交。
@@ -801,10 +805,12 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         for req_id in scheduler_output.finished_req_ids:
             self.input_batch.remove_request(req_id)
 
-        # Free the cached encoder outputs.
+
+        #3. 释放多模态 encoder 的缓存 Free the cached encoder outputs.
         for mm_hash in scheduler_output.free_encoder_mm_hashes:
             self.encoder_cache.pop(mm_hash, None)
 
+        #移除未被调度的请求（从 persistent batch 中清理）
         # Remove the unscheduled requests from the persistent batch.                #从持久化batch中移除未被调度的请求
         # NOTE(woosuk): The unscheduled requests are either preempted requests      #注意（woosuk）：这些未被调度的请求，要么是被抢占（preempted）的请求，要么是当前仍在运行但这一步没有被调度到的请求。
         # or running requests that are not scheduled in this step. We remove        #我们会把它们从 persistent batch 中移除，但保留它们的缓存状态（cached states），因为它们在未来还会再次被调度执行。
@@ -813,31 +819,29 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         scheduled_req_ids = scheduler_output.num_scheduled_tokens.keys()
         cached_req_ids = self.input_batch.req_id_to_index.keys()
         resumed_req_ids = scheduler_output.scheduled_cached_reqs.resumed_req_ids
-        # NOTE(zhuohan): cached_req_ids and resumed_req_ids are usually disjoint,
-        # so `(scheduled_req_ids - resumed_req_ids) == scheduled_req_ids` holds
-        # apart from the forced-preemption case in reset_prefix_cache. And in
-        # that case we include the resumed_req_ids in the unscheduled set so
-        # that they get cleared from the persistent batch before being re-scheduled
+        # NOTE(zhuohan): cached_req_ids and resumed_req_ids are usually disjoint,    注意cached)req)ids和resumed_req_ids通常是不重叠的
+        # so `(scheduled_req_ids - resumed_req_ids) == scheduled_req_ids` holds      因此`(scheduled_req_ids - resumed_req_ids) == scheduled_req_ids` 通常成立。
+        # apart from the forced-preemption case in reset_prefix_cache. And in        但在 reset_prefix_cache 导致的强制抢占（forced-preemption）情况下例外。
+        # that case we include the resumed_req_ids in the unscheduled set so         在这种特殊情况下，我们会把 resumed_req_ids 也加入到 unscheduled 集合中，
+        # that they get cleared from the persistent batch before being re-scheduled  以便它们在走正常的 resumed 请求路径之前，先从 persistent batch 中被清理掉。
         # in the normal resumed request path.
         unscheduled_req_ids = cached_req_ids - (scheduled_req_ids - resumed_req_ids)
-        # NOTE(woosuk): The persistent batch optimization assumes that
-        # consecutive batches contain mostly the same requests. If batches
-        # have low request overlap (e.g., alternating between two distinct
-        # sets of requests), this optimization becomes very inefficient.
+        # NOTE(woosuk): The persistent batch optimization assumes that               注意：持久化batch优化建立在一个重要假设之上：
+        # consecutive batches contain mostly the same requests. If batches           即连续的几个batch中包含的请求大部分是相同的
+        # have low request overlap (e.g., alternating between two distinct           如果请求重叠度很低（例如再两组完全不同的请求集合之间来回切换）
+        # sets of requests), this optimization becomes very inefficient.             这个优化就会变得非常低效
         for req_id in unscheduled_req_ids:
             self.input_batch.remove_request(req_id)
 
+        #5添加新的请求（new requests）
         reqs_to_add: list[CachedRequestState] = []
         # Add new requests to the cached states.
-        for new_req_data in scheduler_output.scheduled_new_reqs:
+        for new_req_data in scheduler_output.scheduled_new_reqs:                      #scheduler已经帮你筛好了，这一轮允许进入系统的请求
             req_id = new_req_data.req_id
             sampling_params = new_req_data.sampling_params
             pooling_params = new_req_data.pooling_params
 
-            if (
-                sampling_params
-                and sampling_params.sampling_type == SamplingType.RANDOM_SEED
-            ):
+            if (sampling_params and sampling_params.sampling_type == SamplingType.RANDOM_SEED):
                 generator = torch.Generator(device=self.device)
                 generator.manual_seed(sampling_params.seed)
             else:
@@ -867,7 +871,7 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
             )
             self.requests[req_id] = req_state
 
-            if sampling_params and sampling_params.prompt_logprobs is not None:
+            if sampling_params and sampling_params.prompt_logprobs is not None:  #这段代码是在决定：每个 prompt token，要返回“多少个候选词的概率信息”
                 self.num_prompt_logprobs[req_id] = (
                     self.input_batch.vocab_size
                     if sampling_params.prompt_logprobs == -1
@@ -884,24 +888,25 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
 
             reqs_to_add.append(req_state)
 
+        #6.更新正在运行/恢复的请求（核心更新逻辑）
         # Update the states of the running/resumed requests.
-        is_last_rank = get_pp_group().is_last_rank
-        req_data = scheduler_output.scheduled_cached_reqs
+        is_last_rank = get_pp_group().is_last_rank             #判断当前GPU是不是pipeline的最后一层
+        req_data = scheduler_output.scheduled_cached_reqs      #拿到正在请求的数据，scheduler已经告诉你哪些请求是继续执行的或恢复的
 
         # Wait until valid_sampled_tokens_count is copied to cpu,
         # then use it to update actual num_computed_tokens of each request.
-        valid_sampled_token_count = self._get_valid_sampled_token_count()
+        valid_sampled_token_count = self._get_valid_sampled_token_count() #真正成功生成了多少个token，原来在GPU，要拿到CPU上去用
 
-        for i, req_id in enumerate(req_data.req_ids):
+        for i, req_id in enumerate(req_data.req_ids):                     #把scheduler给出的这一轮的执行结果，逐个写回到每个request的内部状态里
             req_state = self.requests[req_id]
-            num_computed_tokens = req_data.num_computed_tokens[i]
+            num_computed_tokens = req_data.num_computed_tokens[i]         #这一轮这个 request 又推进了多少 token
             new_block_ids = req_data.new_block_ids[i]
-            resumed_from_preemption = req_id in req_data.resumed_req_ids
-            num_output_tokens = req_data.num_output_tokens[i]
+            resumed_from_preemption = req_id in req_data.resumed_req_ids  #判断是否是刚被赶出去
+            num_output_tokens = req_data.num_output_tokens[i]             #这个 request 已经生成了多少“真正输出 token”
             req_index = self.input_batch.req_id_to_index.get(req_id)
 
-            # prev_num_draft_len is used in async scheduling mode with
-            # spec decode. it indicates if need to update num_computed_tokens
+            # prev_num_draft_len is used in async scheduling mode with              #在异步调度+投机解码下，有些提前生成的草稿token在前几步不计入已处理长度
+            # spec decode. it indicates if need to update num_computed_tokens       但到了后面需要补算进去，所以用prev_num_draft_len来判断要不要修正num_computed_tokens
             # of the request. for example:
             # fist step: num_computed_tokens = 0, spec_tokens = [],
             # prev_num_draft_len = 0.
@@ -913,10 +918,10 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
             # the spec tokens length, but in third step it contains the
             # spec tokens length. we only need to update num_computed_tokens
             # when prev_num_draft_len > 0.
-            if req_state.prev_num_draft_len:
-                if req_index is None:
+            if req_state.prev_num_draft_len:    #如果上一轮确实生成过draft token(草稿token)
+                if req_index is None:           #如果当前batch找不到这个request 说明它已经被移除调度（可能完成、被抢占、结束）
                     req_state.prev_num_draft_len = 0
-                else:
+                else:#如果还在运行
                     assert self.input_batch.prev_req_id_to_index is not None
                     prev_req_index = self.input_batch.prev_req_id_to_index[req_id]
                     num_accepted = valid_sampled_token_count[prev_req_index] - 1
@@ -925,12 +930,12 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
                     req_state.output_token_ids.extend([-1] * num_accepted)
 
             # Update the cached states.
-            req_state.num_computed_tokens = num_computed_tokens
+            req_state.num_computed_tokens = num_computed_tokens           #更新当前request已经生成的token数量
 
-            if not is_last_rank:
-                # When using PP, the scheduler sends the sampled tokens back,
-                # because there's no direct communication between the first-
-                # stage worker and the last-stage worker.
+            if not is_last_rank: #看是否是最后一层GPU(PP)
+                # When using PP, the scheduler sends the sampled tokens back, 只有最后一个rank 才能计算Logits和采样token
+                # because there's no direct communication between the first-  因此scheduler会把上一步采样得到的new_token_ids通过通信发回给这些rank
+                # stage worker and the last-stage worker.                     原因：第一阶段worker和最后一阶段worker之间没有直接通信通道
                 new_token_ids = req_data.new_token_ids[i]
                 # Add the sampled token(s) from the previous step (if any).
                 # This doesn't include "unverified" tokens like spec tokens.
@@ -943,9 +948,9 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
                 elif num_new_tokens > 0:
                     req_state.output_token_ids.extend(new_token_ids[-num_new_tokens:])
             elif num_output_tokens < len(req_state.output_token_ids):
-                # Some output tokens were discarded due to a sync-KV-load
+                # Some output tokens were discarded due to a sync-KV-load     检测到本地缓存比状态还多 说明kv synv failure或rollback
                 # failure. Align the cached state.
-                del req_state.output_token_ids[num_output_tokens:]
+                del req_state.output_token_ids[num_output_tokens:]            #丢弃多余token，强制对齐scheduler认为的结果
                 if req_index is not None:
                     end_idx = (
                         self.input_batch.num_prompt_tokens[req_index]
@@ -953,20 +958,23 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
                     )
                     self.input_batch.num_tokens_no_spec[req_index] = end_idx
 
-            # Update the block IDs.
+            # Update the block IDs. block（KV cache）更新
             if not resumed_from_preemption:
+                #正常运行： kv cache是连续增长的
                 if new_block_ids is not None:
-                    # Append the new blocks to the existing block IDs.
+                    # Append the new blocks to the existing block IDs. 每一层可能多个kv cache block
                     for block_ids, new_ids in zip(req_state.block_ids, new_block_ids):
-                        block_ids.extend(new_ids)
+                        block_ids.extend(new_ids)  #把新分配的kv block追加到历史链路
             else:
+                #发生preemption(抢占 换出后恢复) kv cache已经不可信 需要整体替换
                 assert req_index is None
                 assert new_block_ids is not None
                 # The request is resumed from preemption.
-                # Replace the existing block IDs with the new ones.
+                # Replace the existing block IDs with the new ones.  #直接用恢复后的block table覆盖旧状态
                 req_state.block_ids = new_block_ids
 
             if req_index is None:
+                #不在当前batch 可能刚恢复或刚被重新调度
                 # The request is not in the persistent batch.
                 # The request was either preempted and resumed later, or was not
                 # scheduled in the previous step and needs to be added again.
@@ -1028,12 +1036,14 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
                     scheduler_output.total_num_scheduled_tokens -= num_spec_tokens
                     scheduler_output.num_scheduled_tokens[req_id] -= num_spec_tokens
                     scheduler_output.scheduled_spec_decode_tokens.pop(req_id, None)
+
+        #7.最后收尾工作
         # Add the new or resumed requests to the persistent batch.
         # The smaller empty indices are filled first.
         for request in reqs_to_add:
             self.input_batch.add_request(request)
 
-        # Condense the batched states if there are gaps left by removed requests
+        # Condense the batched states if there are gaps left by removed requests 压缩batch
         self.input_batch.condense()
         # Allow attention backend to reorder the batch, potentially
         self._may_reorder_batch(scheduler_output)
@@ -1362,7 +1372,7 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
 
         return encoder_seq_lens, encoder_seq_lens_cpu
 
-    def _prepare_inputs(                            #将调度器（scheduler）决定好的今天要处理哪些请求的指令，翻译成GPU能听懂的张量
+    def _prepare_inputs(
         self,
         scheduler_output: "SchedulerOutput",
         num_scheduled_tokens: np.ndarray,
@@ -1370,22 +1380,32 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         torch.Tensor,
         SpecDecodeMetadata | None,
     ]:
-        """ 根据scheduler的输出，准备模型前向计算所需的所有输入张量。
-        :return: tuple[
-            logits_indices, spec_decode_metadata, 用于从 logits 中提取需要采样的位置索引 推测解码相关的元数据（如果启用）
-        ]
         """
+        把 scheduler 的调度结果（谁算多少 token）展开成“逐 token 的位置、归属、索引”，供模型前向计算使用
+        args:
+            scheduler_output: scheduler 的调度结果
+            num_scheduled_tokens: 每个request要算多少token
+        output:
+            logits_indices：哪些位置要采样
+            spec_decode_metadata：推测解码信息
+        """
+
+        #校验，确保batch里确实有请求
         total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         assert total_num_scheduled_tokens > 0
         num_reqs = self.input_batch.num_reqs
         assert num_reqs > 0
 
-        # OPTIMIZATION: Start copying the block table first.   性能优化：优先开始赋值block table(kv cache物理块映射)
-        # This way, we can overlap the copy with the following CPU operations. 这样可以让后面的CPU操作与GPU的内存拷贝进行重叠 就是先把最耗时的GPU内存拷贝操作启动起来，然后趁它后台拷贝的时候，继续在CPU上干别的活
+        #把kv cache映射（block table）从CPU拷贝到GPU（异步），意义在于隐藏GPU拷贝延迟，让CPU后续计算和它并行。block table是每个request的kv cache在GPU显存的位置映射表
+        #比如request A → [block 3, block 8]   request A → [block 3, block 8]
+        #调度是在CPU上做的，但GPU必须知道某个request的kv在哪几个block里
+        # OPTIMIZATION: Start copying the block table first.
+        # This way, we can overlap the copy with the following CPU operations.
         self.input_batch.block_table.commit_block_table(num_reqs)
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2] #把每个请求的 index 按照其本次调度的 token 数量进行重复，得到 token 级别的 request index
+        #num_reqs是整数，比如"3", self.arrange_np[:3]则为[0,1,2];  num_scheduled_tokens = np.array([2, 5, 3])
         req_indices = np.repeat(self.arange_np[:num_reqs], num_scheduled_tokens)
 
         # cu_num_tokens: [2, 5, 3] -> [2, 7, 10] #累积token数量
@@ -1393,12 +1413,20 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         cu_num_tokens, arange = self._get_cumsum_and_arange(num_scheduled_tokens)
 
         # Get positions. 计算每个token在其序列中的绝对位置（position ids）
+        #举例说：
+        # token全局位置, req_indices, num_computed_tokens[req], arange, position_id = num_computed + arange
+        # 0, 0, 10, 0, 10
+        # 1, 0, 10, 1, 11
+        # 2, 1, 25, 0, 25
+        # 3, 1, 25, 1, 26
+        # 4, 1, 25, 2, 27
+        # 5, 1, 25, 3, 28
+        # 6, 1, 25, 4, 29
+        # 7, 2, 8, 0, 8
+        # 8, 2, 8, 1, 9
+        # 9, 2, 8, 2, 10  如表所示，就是弄了一个全局的位置，每个token在整个序列中的全局位置
         positions_np = self.positions.np[:total_num_scheduled_tokens]
-        np.add(
-            self.input_batch.num_computed_tokens_cpu[req_indices],
-            arange,
-            out=positions_np,
-        )
+        np.add(self.input_batch.num_computed_tokens_cpu[req_indices],arange,out=positions_np)
 
         # Calculate M-RoPE positions. 多维ROPE ， 仅对使用M-ROPE的模型有效 如qwen-vl
         # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
@@ -1411,23 +1439,28 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
             self._calc_xdrope_positions(scheduler_output)
 
         # Get token indices.
-        # E.g., [0, 1, 0, 1, 2, 3, 4, 0, 1, 2] #把 (request_index, position) 转换为 token_ids 张量中的一维 flat index
-        # -> [0, 1, M, M + 1, M + 2, M + 3, M + 4, 2 * M, 2 * M + 1, 2 * M + 2]
+        # 把 (request_index, position) 转换为 token_ids_cpu 张量中的一维扁平索引（flat index）
+        # 这样后续可以用这个索引从 token_ids_cpu 中快速取出本次 forward 所需的所有 token id
+        # 示例（假设 max_model_len = M）：
+        #   req_indices   = [0,0,1,1,1,1,1,2,2,2]
+        #   positions_np  = [10,11,25,26,27,28,29,8,9,10]
+        #   token_indices = [10,11, M+25, M+26, ..., 2*M+8, 2*M+9, 2*M+10]
         # where M is the max_model_len.
-        token_indices = (
-            positions_np + req_indices * self.input_batch.token_ids_cpu.shape[1]
-        )
+        #不理解为什么这么搞啊：
+        #其实这是vllm v1的persistent batch思路，把所有活跃请求的token序列长期保存在一个大二位CPU张量token_ids_cpu中，形状通常是 (max_num_seqs, max_model_len)。
+        #这样做就是极高的效率，大部分请求是decode,只需要更新token_ids_cpu 中很少的几个位置
+        token_indices = (positions_np + req_indices * self.input_batch.token_ids_cpu.shape[1])
         token_indices_tensor = torch.from_numpy(token_indices)
 
         # NOTE(woosuk): We use torch.index_select instead of np.take here
         # because torch.index_select is much faster than np.take for large
         # tensors. ## 使用 torch.index_select 从 token_ids 中收集需要的 token（比 np.take 更快）
-        torch.index_select(
-            self.input_batch.token_ids_cpu_tensor.flatten(),
-            0,
-            token_indices_tensor,
-            out=self.input_ids.cpu[:total_num_scheduled_tokens],
-        )
+        #继续用我们之前的例子：token_indices_tensor = [10, 11, 8217, 8218, 8219, 8220, 8221, 16392, 16393, 16394]
+        #self.input_batch.token_ids_cpu_tensor 是形状为 (max_num_seqs, max_model_len) 的 CPUTensor，展平（flatten）后变成一个超长一维 tensor。
+        #这一行就是真正取数的，self.input_batch.token_ids_cpu_tensor.flatten()压缩成一维，挑token_indices_tensor的，结果放入out
+        torch.index_select(self.input_batch.token_ids_cpu_tensor.flatten(),0,token_indices_tensor,out=self.input_ids.cpu[:total_num_scheduled_tokens])
+
+
         if self.enable_prompt_embeds:#如果启用了prompt embeddings（例如某些多模态或 embedding 模型）
             is_token_ids = self.input_batch.is_token_ids_tensor.flatten()
             torch.index_select(
@@ -2797,7 +2830,7 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         sampling_metadata = self.input_batch.sampling_metadata
         # ==================== 普通采样路径（非推测解码） ====================
         if spec_decode_metadata is None:
-            # Update output token ids with tokens sampled in last step
+            # Update output token ids with tokens sampled in last step          用上一步采样出的token,来更新每个请求的output token ids
             # if async scheduling and required by current sampling params.
             self.input_batch.update_async_output_token_ids()
             return self.sampler(
@@ -2990,18 +3023,21 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
 
     @contextmanager
     def synchronize_input_prep(self):
+        """
+        作用是保证上一批数据GPU用完之后，才允许CPU去复用改写这块数据
+        """
         if self.prepare_inputs_event is None:
             yield
             return
 
-        # Ensure prior step has finished with reused CPU tensors.
-        # This is required in the async scheduling case because
+        # Ensure prior step has finished with reused CPU tensors.    确保上一步已经用完那些被复用的CPU张量
+        # This is required in the async scheduling case because      这在一步调度情况下必须要做的，因为CPU到GPU的数据传输是异步进行的
         # the CPU->GPU transfer happens async.
         self.prepare_inputs_event.synchronize()
         try:
-            yield
+            yield                                                   #yield 是在进入 with 的时候执行到那一行，然后暂停
         finally:
-            self.prepare_inputs_event.record()
+            self.prepare_inputs_event.record()                      #yield 后面的代码是在退出 with 时才执行
 
     def _model_forward(
         self,
@@ -3229,10 +3265,13 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
     @torch.inference_mode()
     def execute_model(
         self,
-        scheduler_output: "SchedulerOutput",
+        scheduler_output: "SchedulerOutput",                        #前向引用 避免实时解析 #来自Scheduler，包含本次要处理的requests、每个request要跑多少token(prefill或decode)、speculative draft tokens等调度信息
         intermediate_tensors: IntermediateTensors | None = None,
-    ) -> ModelRunnerOutput | IntermediateTensors | None: #执行一次forward（可能只是forward,不一定sampling）. 注意这个函数很多时候制作logits不会直接返回token，返回：1.None最常见表示forward完了，等待后续sampling；2IntermediateTensors：pipeline 并行中间结果 ，3.ModelRunnerOutput：特殊路径
-        if self.execute_model_state is not None:   #====0.状态保护 ===== 如果上一次forward还没被sample_tokens消费，就不能再进来
+    ) -> ModelRunnerOutput | IntermediateTensors | None:            #返回值说明大多数情况返回None，表示forward完了，等待后续sampling；返回IntermediateTensors：pipeline 并行中间结果；返回ModelRunnerOutput：特殊路径
+
+        # ====0.状态保护 ===== 如果上一次forward还没被sample_tokens消费，就不能再进来,防止采样逻辑混乱
+        # 看来sample之后会给有一个self.excute_model_state标志位
+        if self.execute_model_state is not None:
             raise RuntimeError(
                 "State error: sample_tokens() must be called "
                 "after execute_model() returns None."
@@ -3245,20 +3284,17 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
         # scheduler_output in engine core process.
         # TODO(Ronald1995): deepcopy is expensive when there is a large
         # number of requests, optimize it later.
-        if (
-            self.use_async_scheduling
-            and self.num_spec_tokens
-            and self._draft_token_ids is None
-        ):
+        if (self.use_async_scheduling and self.num_spec_tokens and self._draft_token_ids is None):
             scheduler_output = deepcopy(scheduler_output)
 
+        # === 2. 预处理阶段（CPU侧 + 状态更新）===
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        with (                                                                 #=== 2. 预处理阶段（CPU侧 + 状态更新）===
-            record_function_or_nullcontext("gpu_model_runner: preprocess"),
-            self.synchronize_input_prep(),
+        with (
+            record_function_or_nullcontext("gpu_model_runner: preprocess"),    #用于profiling(torch.profiler)
+            self.synchronize_input_prep(),                                     #某些情况下需要等待之前的输入准备完成（例如多进程/外部 launcher）。
         ):
-            # Update persistent batch states.                                  #更新batch状态（kv cache  reqest状态等）
-            self._update_states(scheduler_output)
+            # Update persistent batch states.                                  #更新batch状态（kv cache  reqest状态等）更新 KV Cache 的 block 映射、每个 request 的 computed tokens、request 状态（running/finished 等）、prefix caching 信息等。
+            self._update_states(scheduler_output)                              #self.input_batch是持久化的batch对象，保存当前正在处理的requests信息
             # === 2.1 Encoder-only / 多模态路径 ===
             if has_ec_transfer() and get_ec_transfer().is_producer:
                 with self.maybe_get_ec_connector_output(
@@ -3292,7 +3328,7 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
                     "logprobs for prompt tokens, tokens, please disable "
                     "it when the requests need prompt logprobs"
                 )
-            ## === 3. batch 结构准备 ===  构造输入，logits_indices:哪些位置需要计算Logits(通常是最后token)；spec_decode_metadata：speculative decoding 相关信息
+            ## === 3. batch 结构准备 ===  构造输入，logits_indices:哪些位置需要计算Logits(通常是最后token)；spec_decode_metadata：speculative decoding 相关信息；本次准备batch有哪些request,每个request调度多少token，最大调度长度等
             num_reqs = self.input_batch.num_reqs
             req_ids = self.input_batch.req_ids
             tokens = [scheduler_output.num_scheduled_tokens[i] for i in req_ids] #每轮request要跑多少个token
@@ -3300,7 +3336,7 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
             max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
             num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
             # === 4. 构造输入（核心）===  logits_indices：哪些位置需要算 logits（通常是最后 token）  spec_decode_metadata：speculative decoding 相关信息
-            logits_indices, spec_decode_metadata = self._prepare_inputs(
+            logits_indices, spec_decode_metadata = self._prepare_inputs(          #
                 scheduler_output,
                 num_scheduled_tokens_np,
             )
@@ -3343,7 +3379,7 @@ class GPUModelRunner(   #vLLM 里真正负责“在 GPU 上执行模型 forward 
             num_reqs_padded = (
                 batch_desc.num_reqs if batch_desc.num_reqs is not None else num_reqs
             )
-            ubatch_slices, ubatch_slices_padded = maybe_create_ubatch_slices(
+            ubatch_slices, ubatch_slices_padded = maybe_create_ubatch_slices(   #如果用micro-batching,就把当前大batch切分成多个小ubatch，每个ubatch单独forward，适合动态长度、避免padding浪费
                 should_ubatch,
                 num_scheduled_tokens_np,
                 num_tokens_padded,
