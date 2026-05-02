@@ -1,37 +1,37 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
-KVConnectorBase_V1 Class for Distributed KV Cache & Hidden State
+KVConnectorBase_V1 Class for Distributed KV Cache & Hidden State            用于vllm v1中分布式kv cache和hidden state通信的基础类
 communication in vLLM v1
 
-The class provides the following primitives:
-    Scheduler-side: runs in the scheduler, binds metadata, which
+The class provides the following primitives:                                提供如下基础操作 primotives
+    Scheduler-side: runs in the scheduler, binds metadata, which            scheduler侧： 绑定元数据 这些metadata会被worker侧用来加载 保存 kv cache
     is used by the worker-side to load/save KV cache.
-        get_num_new_matched_tokens() - get number of new tokens
-            that exist in the remote KV cache. Might be called multiple
+        get_num_new_matched_tokens() - get number of new tokens                 get_num_new_matched_tokens:获取远端kv cache中已经存在的新token数量
+            that exist in the remote KV cache. Might be called multiple                                    对同一个请求可能会被调用多次，并且必须是无副作用的（side-effect free）
             times for a given request and should be side-effect free.
-        update_state_after_alloc() - update KVConnector state after
+        update_state_after_alloc() - update KVConnector state after             update_state_after_alloc：在CacheManager分配临时buffer之后，更新KVConnector的内部状态
             temporary buffer alloc by the CacheManager.
-        update_connector_output() - update KVConnector state after
+        update_connector_output() - update KVConnector state after              update_connector_output：在收到 worker 侧 connector 的输出之后，更新 KVConnector 的状态。
             output is received from worker-side connectors.
-        request_finished() - called once when a request is finished,
-            with the computed kv cache blocks for the request.
-            Returns whether KV cache should be freed now or if the
+        request_finished() - called once when a request is finished,            request_finished：当一个请求完成时调用（只调用一次），并传入该请求对应的KV cache blocks
+            with the computed kv cache blocks for the request.                                    返回值表示：是否应该立即释放kv cache;  或者由connector接管，在后台异步释放这些block
+            Returns whether KV cache should be freed now or if the                                           同时还可以可选 返回KV传输相关参数
             connector now assumes responsibility for freeing the
             the blocks asynchronously. Also optionally returns KV
             transfer params.
-        take_events() - returns new KV events that were collected
+        take_events() - returns new KV events that were collected                                 返回自上次调用依赖connector收集到的新kv 相关事件
             by the connector since the last call.
 
-    Worker-side: runs in each worker, loads/saves KV cache to/from
-    the Connector based on the metadata.
+    Worker-side: runs in each worker, loads/saves KV cache to/from          worker侧：运行在每个worker上，负责根据metadata,从connector中加载、保存kv cache
+    the Connector based on the metadata.                                           start_load_kv:开始记载所有kv （可能是异步的）
         start_load_kv() - starts loading all KVs (maybe async)
-        wait_for_layer_load() - blocks until layer i load is done
+        wait_for_layer_load() - blocks until layer i load is done                  wait_for_layer_load:阻塞直到第i层的kv 加载完成
 
-        save_kv_layer() - starts saving KV for layer i (maybe async)
-        wait_for_save() - blocks until all saves are done
+        save_kv_layer() - starts saving KV for layer i (maybe async)               save_kv_layer：开始保存第i层的kv（可能是异步的） 
+        wait_for_save() - blocks until all saves are done                          wait_for_save:阻塞知道所有kv保存完成
 
-        get_finished() - called with ids of finished requests, returns
+        get_finished() - called with ids of finished requests, returns              get_finished:输入已完成的请求ID  输出那些已经完成异步发送、接收 KV的请求ID
             ids of requests that have completed async sending/recving.
 """
 
@@ -78,9 +78,9 @@ logger = init_logger(__name__)
 
 class SupportsHMA(ABC):
     """
-    The class that indicates the corresponding connector supports hybrid memory
-    allocator (HMA).
-    This is required to use the connector together with hybrid memory allocator.
+    The class that indicates the corresponding connector supports hybrid memory         一个标识类，用来表明对应额度connector支持混合内存分配器（HMA）
+    allocator (HMA).                        
+    This is required to use the connector together with hybrid memory allocator.        如果想要将该connector与HMA一起使用，这是一个必要条件
     """
 
     @abstractmethod
@@ -89,20 +89,20 @@ class SupportsHMA(ABC):
         request: "Request",
         block_ids: tuple[list[int], ...],
     ) -> tuple[bool, dict[str, Any] | None]:
-        """
-        Called exactly once when a request has finished for all kv cache groups,
-        before its blocks are freed for each group.
+        """                                                         
+        Called exactly once when a request has finished for all kv cache groups,        当一个请求在所有KV cache分组（groups）上都完成时调用
+        before its blocks are freed for each group.                                     且发生在每个分组的block被释放之前，该函数只会被调用一次
 
-        NOTE(Kuntai): This function is only supported by connectors that support HMA.
+        NOTE(Kuntai): This function is only supported by connectors that support HMA.   该函数只适用于支持HMA的connector (HMA指的是 一种把KV cache分层放在多种内存(CPU GPU 远端)里的内存管理策略)
 
-        The connector may assumes responsibility for freeing the blocks
-        asynchronously by returning True.
+        The connector may assumes responsibility for freeing the blocks                 可以通过返回True，表示由其接管这些block的释放
+        asynchronously by returning True.                                               并在后台异步完成释放
 
         Returns:
-            True if the request is being saved/sent asynchronously and blocks
+            True if the request is being saved/sent asynchronously and blocks           如果返回True,表示该请求正在进行异步保存/发送
             should not be freed until the request_id is returned from
             get_finished().
-            Optional KVTransferParams to be included in the request outputs
+            Optional KVTransferParams to be included in the request outputs             dict[str, Any] | None：可选的 KVTransferParams，会被包含在 engine 返回的请求输出中。
             returned by the engine.
         """
         raise NotImplementedError
@@ -143,16 +143,16 @@ class KVConnectorMetadata(ABC):  # noqa: B024
 
 class KVConnectorBase_V1(ABC):
     """
-    Base class for KV connectors.
-
+    Base class for KV connectors.                                               KV connector的抽象基类,作用是定义KV Cache在不同设备/节点之间如何传输 管理的统一接口
+                                                                                可以把它理解为:KV Cache的通信+生命周期管理的抽象层
     Attributes:
-        prefer_cross_layer_blocks (bool): Indicates whether this connector
-            prefers KV blocks that hold KV data for all layers (for speeding
+        prefer_cross_layer_blocks (bool): Indicates whether this connector      prefer_cross_layer_blocks 是否更倾向使用跨层(cross) kv block
+            prefers KV blocks that hold KV data for all layers (for speeding     cross-layer block指的是一个block里包含所有layer的KV 而不是每一层单独一个Block
             up KV data transfers).
             Defaults to False.
     """
 
-    prefer_cross_layer_blocks: ClassVar[bool] = False
+    prefer_cross_layer_blocks: ClassVar[bool] = False                           #类变量,所有实例共享
 
     def __init__(
         self,
@@ -160,11 +160,19 @@ class KVConnectorBase_V1(ABC):
         role: KVConnectorRole,
         kv_cache_config: Optional["KVCacheConfig"] = None,
     ):
+        """
+        初始化KVConnector 
+        参数说明:vllm_config:全局配置
+                role:当前connector的角色(非常关键)-scheduler侧
+                                                 - worker侧  表明这个connector是做决策还是干活
+        kv_cache_config: kv cache的布局/block/分配策略配置
+        """
+        
         logger.warning(
-            "Initializing KVConnectorBase_V1. This API is experimental and "
+            "Initializing KVConnectorBase_V1. This API is experimental and "    #实验阶段,未来可能会变
             "subject to change in the future as we iterate the design."
         )
-        self._connector_metadata: KVConnectorMetadata | None = None
+        self._connector_metadata: KVConnectorMetadata | None = None             #用于 scheduler 和 worker 之间传递 KV 信息（比如 block mapping、状态等）
         self._vllm_config = vllm_config
         if vllm_config.kv_transfer_config is not None:
             self._kv_transfer_config = vllm_config.kv_transfer_config
@@ -189,14 +197,14 @@ class KVConnectorBase_V1(ABC):
     # ==============================
 
     def bind_connector_metadata(self, connector_metadata: KVConnectorMetadata) -> None:
-        """Set the connector metadata from the scheduler.
+        """Set the connector metadata from the scheduler.                           从scheduler设置(绑定)connector的元数据
 
-        This function should be called by the model runner every time
-        before the model execution. The metadata will be used for runtime
+        This function should be called by the model runner every time               该函数应由model runner在每次模型执行前调用一次
+        before the model execution. The metadata will be used for runtime           这些元数据会在运行时用于KV CACHE的加载与保存
         KV cache loading and saving.
 
         Args:
-            connector_metadata (dict): the connector metadata.
+            connector_metadata (dict): the connector metadata.                      
         """
         self._connector_metadata = connector_metadata
 
@@ -242,22 +250,23 @@ class KVConnectorBase_V1(ABC):
         self, kv_cache: torch.Tensor, attn_backend: type["AttentionBackend"]
     ):
         """
-        Initialize with a single KV cache tensor used by all layers.
-        The first dimension should be num_layers.
-        This function will only be called for models with uniform layers,
-        and only if the prefers_cross_layer_blocks is set to True.
-        Only one of the functions
-        {register_kv_caches, register_cross_layers_kv_cache} will be called.
+        Initialize with a single KV cache tensor used by all layers.                    使用一个跨所有层共享的kv cache张量进行初始化
+        The first dimension should be num_layers.                                       该张量的第一个维度应为num_layers(层数)
+        This function will only be called for models with uniform layers,               该函数只会在以下情况被调用:
+        and only if the prefers_cross_layer_blocks is set to True.                          模型的各层是统一结构（uniform layers）
+        Only one of the functions                                                           且 prefers_cross_layer_blocks 被设置为 True
+        {register_kv_caches, register_cross_layers_kv_cache} will be called.            在 {register_kv_caches, register_cross_layers_kv_cache} 这两个函数中，只会调用其中一个。
+     
 
         Args:
-            kv_cache: a cross-layers kv cache tensor
-            attn_backend: The attention backend that corresponds to all layers
+            kv_cache: a cross-layers kv cache tensor                                    一个跨层的kv cache张量
+            attn_backend: The attention backend that corresponds to all layers          对应所有曾使用的attention backend
         """
         return
 
     def set_host_xfer_buffer_ops(self, copy_operation: CopyBlocksOp):
         """
-        Set the xPU-specific ops for copying KV between host and device.
+        Set the xPU-specific ops for copying KV between host and device.                设置用于在 host（CPU）和 device（GPU/xPU）之间拷贝 KV cache 的专用操作。
         Needed when host buffer is used for kv transfer (e.g., in NixlConnector)
         """
         return
@@ -265,13 +274,13 @@ class KVConnectorBase_V1(ABC):
     @abstractmethod
     def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:
         """
-        Start loading the KV cache from the connector to vLLM's paged
-        KV buffer. This is called from the forward context before the
-        forward pass to enable async loading during model execution.
+        Start loading the KV cache from the connector to vLLM's paged                  开始从connector中加载kv cache, 并写入vllm的分页kv buffer 
+        KV buffer. This is called from the forward context before the                  这个过程发生在forward pass之前,由forward context调用
+        forward pass to enable async loading during model execution.                   目的是在模型执行期间支持 异步kv加载
 
         Args:
-            forward_context (ForwardContext): the forward context.
-            **kwargs: additional arguments for the load operation
+            forward_context (ForwardContext): the forward context.                     当前forward执行的上下文信息
+            **kwargs: additional arguments for the load operation                      包含本次推理所需的状态 request信息等
 
         Note:
             The number of elements in kv_caches and layer_names should be
@@ -535,8 +544,8 @@ class KVConnectorBase_V1(ABC):
 
     def get_finished_count(self) -> int | None:
         """
-        Get the count of requests expected to complete send/receive operations
-        via this connector. This method is used to initialize the
+        Get the count of requests expected to complete send/receive operations   获取预计会通过connector完成发送/接收操作的请求数量.该方法用于初始化KVOutputAggregator
+        via this connector. This method is used to initialize the                并会覆盖默认的world-size 
         KVOutputAggregator, overwriting the default world_size.
 
         Returns:

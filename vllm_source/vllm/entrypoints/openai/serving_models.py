@@ -39,9 +39,7 @@ class LoRAModulePath:
 
 class OpenAIServingModels:
     """Shared instance to hold data about the loaded base model(s) and adapters.
-    本质是一个“模型注册表 + LoRA 适配器管理器”，用于在推理服务里统一管理 基础模型(base model) 和 LoRA adapter。
-    简单说：它让一个模型服务可以 动态加载 / 卸载 LoRA，并把这些模型通过 OpenAI API 形式暴露出来。
-    如果用费曼方式理解，可以把它想成一个 “模型仓库管理员”：仓库里有基础模型，也可以临时装很多 LoRA，小助手负责记录、加载、删除，并对外展示有哪些模型。
+
     Handles the routes:
     - /v1/models
     - /v1/load_lora_adapter

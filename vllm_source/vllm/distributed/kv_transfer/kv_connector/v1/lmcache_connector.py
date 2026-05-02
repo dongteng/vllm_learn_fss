@@ -263,8 +263,8 @@ class LMCacheConnectorV1(KVConnectorBase_V1):
         self, scheduler_output: SchedulerOutput
     ) -> KVConnectorMetadata:
         """
-        Build the connector metadata for this step.
-
+        Build the connector metadata for this step.                             构建本轮step的kv connector元数据,这个metadata的作用是 把本轮需要做的kv操作(加载/存储/映射关系)打包成一个对象,交给执行侧(worker/engine)去实际执行
+                                                                                可以理解为scheduler只负责plan, connector metadata是执行说明书
         This function should NOT modify fields in the scheduler_output.
         Also, calling this function will reset the state of the connector.
 

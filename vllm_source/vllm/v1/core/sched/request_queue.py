@@ -208,7 +208,7 @@ class PriorityRequestQueue(RequestQueue):
 
 
 def create_request_queue(policy: SchedulingPolicy) -> RequestQueue:
-    """Create request queue based on scheduling policy."""
+    """Create request queue based on scheduling policy.根据调度策略创建对应的工厂函数"""
     if policy == SchedulingPolicy.PRIORITY:
         return PriorityRequestQueue()
     elif policy == SchedulingPolicy.FCFS:

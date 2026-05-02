@@ -102,7 +102,16 @@ class ConstantList(Generic[T], Sequence):
 
 
 class CpuGpuBuffer:
-    """Buffer to easily copy tensors between CPU and GPU."""
+    """Buffer to easily copy tensors between CPU and GPU.
+    vLLM中用于在CPU和GPU之间高效传输数据的辅助缓冲区（Buffer）
+    
+    设计思想：预先在CPU和GPU上各分配一块相同形状和类型的内存，后续只要在两者之间进行数据拷贝，而不需要反复创建tensor
+    主要作用：1.减少内存分配开销  2支持异步拷贝（non-blocking） 让GPU计算和数据传输尽量重叠 3.提供方便的.np属性，方便再CPU侧以numpy方式操作数据
+    
+    典型使用场景：
+    - slot_mapping、num_computed_tokens、sampling 参数等需要在 CPU 上准备，然后快速传到 GPU
+    - logits、采样结果等从 GPU 传回 CPU 进行后处理
+    """
 
     def __init__(
         self,
@@ -112,11 +121,25 @@ class CpuGpuBuffer:
         pin_memory: bool,
         with_numpy: bool = True,
     ) -> None:
+        """
+        初始化一个CPU-GPU配对缓冲区
+        
+        Args:
+            *size:tensor的形状（支持多维，例如 (max_num_reqs, max_seq_len)）
+            dtype: 数据类型（如 torch.int32, torch.float16 等）
+            device: GPU 所在的设备（通常是 cuda:0）
+            pin_memory: 是否使用锁页内存（Pinned Memory），大幅加速 CPU→GPU 传输
+            with_numpy: 是否同时创建一个 numpy 视图（方便 CPU 侧直接操作）
+                       注意：bfloat16 无法直接转 numpy，所以必须设为 False
+        """
+        # 在 CPU 上分配内存（支持 pin_memory 加速传输），如果不是pin那么togpu的时候还会临时弄到pin里边去
         self.cpu = torch.zeros(*size, dtype=dtype, device="cpu", pin_memory=pin_memory)
         self.gpu = torch.zeros_like(self.cpu, device=device)
+        
+        #可选 创建一个numpy视图，方便在CPU上直接进行数组操作（例如批量赋值、切片等，比 torch.cpu 操作更灵活）
         self.np: np.ndarray
-        # To keep type hints simple (avoiding generics and subclasses), we
-        # only conditionally create the numpy array attribute. This can cause
+        # To keep type hints simple (avoiding generics and subclasses), we      只有with_numpy=True时才创建numpy视图
+        # only conditionally create the numpy array attribute. This can cause   注意numpy操作在很多场景下比torch cpu操作更快更直观
         # AttributeError if `self.np` is accessed when `with_numpy=False`.
         if with_numpy:
             if dtype == torch.bfloat16:
@@ -127,13 +150,26 @@ class CpuGpuBuffer:
             self.np = self.cpu.numpy()
 
     def copy_to_gpu(self, n: int | None = None) -> torch.Tensor:
-        if n is None:                                                   #将CPU上的数据异步拷贝到对应的GPU张量中，这是一个常用的辅助函数，用于把在CPU上准备好的数据快速传输到GPU
-            return self.gpu.copy_(self.cpu, non_blocking=True)          #对self.gpu来说是原地操作，不会分配只是内容覆盖
+        """
+        将 CPU buffer 中的数据拷贝到 GPU buffer 中。
+        
+        参数：
+            n: 如果传入，则只拷贝前 n 行（常用于 batch 大小动态变化的情况）
+               如果为 None，则拷贝整个 buffer
+        
+        返回：GPU 上的 tensor（实际是 self.gpu 的引用）
+        
+        特点：使用 non_blocking=True 进行异步拷贝，GPU 可以继续执行其他计算
+        """
+        
+        if n is None:                                                   
+            return self.gpu.copy_(self.cpu, non_blocking=True)         
         return self.gpu[:n].copy_(self.cpu[:n], non_blocking=True)
 
     def copy_to_cpu(self, n: int | None = None) -> torch.Tensor:
         """NOTE: Because this method is non-blocking, explicit synchronization
-        is needed to ensure the data is copied to CPU."""
+        is needed to ensure the data is copied to CPU. 将GPU buffer中的数据拷贝到CPU buffer中
+        """
         if n is None:
             return self.cpu.copy_(self.gpu, non_blocking=True)
         return self.cpu[:n].copy_(self.gpu[:n], non_blocking=True)

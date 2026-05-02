@@ -890,10 +890,7 @@ def get_sentence_transformer_tokenizer_config(
 
 
 def maybe_register_config_serialize_by_value() -> None:
-    """
-    解决在分布式推理系统中致命问题：HF远程自定义配置类在多进程/多节点环境中无法序列化与反序列化
-    这段代码解决huggingface动态加载模型代码在分布式多进程环境下地跨进程可序列化问题
-    Try to register HF model configuration class to serialize by value
+    """Try to register HF model configuration class to serialize by value
 
     If trust_remote_code is set, and the model's config file specifies an
     `AutoConfig` class, then the config class is typically an instance of

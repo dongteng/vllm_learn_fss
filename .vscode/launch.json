@@ -10,17 +10,20 @@
             "justMyCode": false,
             "python": "/root/miniconda3/envs/vllm/bin/python",
             "args": [
-                "--model", "/data/nas/zhjm/model_cache/docker-shared/Qwen3-1.7B",
+                "--model", "/data/nas/zhjm/model_cache/docker-shared/Qwen3-0.6B",
                 "--dtype", "float16",
                 "--max-model-len", "4096",
+                // "--async-scheduling",
                 "--disable_frontend_multiprocessing","True",
                 "--gpu-memory-utilization", "0.6",
                 "--max-num-batched-tokens", "8192",
                 "--max-num-seqs", "256",
-                "--port", "13311"
+                "--port", "13311",
+                "--kv-transfer-config", "{\"kv_connector\":\"LMCacheConnectorV1\", \"kv_role\":\"kv_both\"}"
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "4",
+                "LMCACHE_CHUNK_SIZE":"8",
+                "CUDA_VISIBLE_DEVICES": "3",
                 "HTTP_PROXY": "",
                 "HTTPS_PROXY": "",
                 "NO_PROXY": "*"

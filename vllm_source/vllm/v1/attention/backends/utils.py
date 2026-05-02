@@ -294,27 +294,20 @@ M = TypeVar("M")
 
 
 class AttentionCGSupport(enum.Enum):
-    """Constants for the cudagraph support of the attention backend             注意力后端（Attention Backend）对 CUDA Graph 的支持程度枚举。
+    """Constants for the cudagraph support of the attention backend
     Here we do not consider the cascade attention, as currently
-    it is never cudagraph supported.
-    """
+    it is never cudagraph supported."""
+
     ALWAYS = 3
-    """Cudagraph always supported; supports mixed-prefill-decode
-    始终支持CUDA Graph（最高级别）支持混合 prefill + decode 批次（mixed-prefill-decode）这是最理想的情况，绝大多数现代 FlashAttention / FlashInfer 后端都争取达到这个级别。
-    """
+    """Cudagraph always supported; supports mixed-prefill-decode"""
     UNIFORM_BATCH = 2
-    """Cudagraph supported for batches the only contain query lengths that are    支持均匀批次下的CUDA Graph，即批次中所有请求的query length（查询长度）必须完全相同
-    the same, this can be used for spec-decode                                        
-        i.e. "decodes" are 1 + num_speculative_tokens
-    
-    """
+    """Cudagraph supported for batches the only contain query lengths that are
+    the same, this can be used for spec-decode
+        i.e. "decodes" are 1 + num_speculative_tokens"""
     UNIFORM_SINGLE_TOKEN_DECODE = 1
-    """Cudagraph supported for batches the only contain query_len==1 decodes
-    仅支持单 token decode 的 Uniform CUDA Graph（较弱支持） 仅当批次中所有请求的 query_len == 1（纯 decode，且每个请求只生成 1 个 token）时支持。这通常是较老或功能较受限的后端所能达到的级别。
-    """
+    """Cudagraph supported for batches the only contain query_len==1 decodes"""
     NEVER = 0
-    """NO cudagraph support完全不支持 CUDA Graph（最低级别）
-    该后端无法使用 CUDA Graph，只能走 eager 执行模式，性能相对较差。"""
+    """NO cudagraph support"""
 
 
 class AttentionMetadataBuilder(abc.ABC, Generic[M]):
@@ -1016,7 +1009,7 @@ def reorder_batch_to_split_decodes_and_prefills(
     requests with <= decode_threshold tokens at the front of the batch.
     该函数通过重新排列批次（Batch）将请求分为“预填充（Prefill）”和“解码（Decode）”两部分；将所有调度 Token 数量 < decode_threshold（解码阈值）的请求排在批次的最前面。
     Returns:
-        True if the batch was modified, False otherwise. #返回值： 如果批次顺序被修改则返回 True，否则返回 False。
+        True if the batch was modified, False otherwise. #返回值： True  表示 batch 顺序发生了改变（进行了重排序）；False 表示 batch 顺序已经是理想状态，无需调整
     """
     # We now want to reorder the batch into decode → extend → prefill order     #我们希望将批次按照 解码 (Decode) → 扩展 (Extend) → 预填充 (Prefill) 的顺序排列
     # where:
@@ -1026,16 +1019,26 @@ def reorder_batch_to_split_decodes_and_prefills(
     # NOTE for now we loosely use "decode" to mean requests where attention is  #注意：目前我们粗略地用 "Decode" 代表访存密集型（Memory-bound）请求，用 "Prefill" 代表计算密集型（Compute-bound）请求
     #  likely memory-bound and "prefill" to mean requests where attention is    #重排目的：把性质相似的请求扎堆，让底层的注意力算子（Attention Kernel）能一次性处理一类任务，从而减少 GPU 指令切换的开销。
     #  likely compute-bound,
+    # 实际例子：
+    #   当前 batch 有 5 个请求：
+    #       A: Decode（调度 1 token）
+    #       B: Prefill（新请求，调度 800 token）
+    #       C: Decode（调度 1 token）
+    #       D: Extend（已有上下文，调度 4 token）
+    #       E: Prefill（新请求，调度 1200 token）
+    #
+    #   重排序前：[A, B, C, D, E]   → 混合交错，效率低
+    #   重排序后：[A, C, D, B, E]   → Decode + Extend + Prefill 分组，效率更高
     num_reqs = len(input_batch.req_ids)
-    num_scheduled_tokens = [
-        scheduler_output.num_scheduled_tokens[id] for id in input_batch.req_ids
-    ]
-    num_scheduled_tokens_np = np.array(num_scheduled_tokens)
+    
+    num_scheduled_tokens = [scheduler_output.num_scheduled_tokens[id] for id in input_batch.req_ids] #获取每个请求本次调度（scheduled）的token数量
+    num_scheduled_tokens_np = np.array(num_scheduled_tokens)                                         ## 获取每个请求已经计算过的 token 数量（用于区分 Extend 和 Prefill）
     num_computed_tokens_np = input_batch.num_computed_tokens_cpu[:num_reqs]
 
-    is_decode = num_scheduled_tokens_np <= decode_threshold
-    is_extend = (~is_decode) & (num_computed_tokens_np > 0)
-    is_prefill = (~is_decode) & (num_computed_tokens_np == 0)
+    # ====================== 分类三种请求类型 ======================
+    is_decode = num_scheduled_tokens_np <= decode_threshold                                          ## is_decode: 本次只调度很少 token（通常是 1），属于正在生成的 Decode 请求
+    is_extend = (~is_decode) & (num_computed_tokens_np > 0)                                          ## is_extend: 本次调度较多 token，但已经有历史上下文（继续生成）
+    is_prefill = (~is_decode) & (num_computed_tokens_np == 0)                                        # is_prefill: 本次调度较多 token，且没有任何历史上下文（全新请求）
 
     # Desired order: decode → extend → prefill
     req_regions = np.zeros(is_decode.shape, dtype=np.int32)  # 0 = decode by default
@@ -1049,22 +1052,25 @@ def reorder_batch_to_split_decodes_and_prefills(
     target_regions[num_decodes : num_decodes + num_extends] = 1
     target_regions[num_decodes + num_extends :] = 2
 
-    needs_swap = req_regions != target_regions
+    needs_swap = req_regions != target_regions              #判断是否要重排序
 
     if not needs_swap.any():
-        return False
+        return False                                        #已经是理想排序 无需调整
 
+    # ====================== 执行重排序 ======================
+    # 找出需要移动的请求索引，并按目标区域稳定排序
     # Extract indices that need swapping and sort by target region
     orig_indices = np.where(needs_swap)[0]
     sorted_order = np.argsort(req_regions[needs_swap], kind="stable")
     src_indices = orig_indices[sorted_order]
 
+    #构建源索引->目标索引的摄影社
     src_dest_map = {int(src): int(dst) for src, dst in zip(src_indices, orig_indices)}
-
+    # 执行实际的交换操作（使用循环处理可能出现的链式交换）
     for src in src_dest_map:
         dst = src_dest_map[src]
         while src != dst:
-            input_batch.swap_states(src, dst)
+            input_batch.swap_states(src, dst)                 ## 真正交换两个请求的所有状态
             # Mark dst as done by updating its destination to itself
             next_dst = src_dest_map.get(dst, dst)
             src_dest_map[dst] = dst

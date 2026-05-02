@@ -102,7 +102,7 @@ async def serve_http(
 
     try:
         await server_task
-        return dummy_shutdown() #返回一个协程对象   这个return永远到不了吧
+        return dummy_shutdown() #返回一个协程对象
     except asyncio.CancelledError:
         port = uvicorn_kwargs["port"]
         process = find_process_using_port(port)

@@ -42,24 +42,38 @@ def get_kv_connector_cache_layout():
 
 
 class KVOutputAggregator:
-    """Utility class to aggregate the output of all workers into a single
-    output corresponding to Rank 0 for scheduler."""
+    """Utility class to aggregate the output of all workers into a single           工具类:用于把多个worker的kv输出汇总成scheduler侧的单一结果
+    output corresponding to Rank 0 for scheduler."""                                #本质作用,在分布式推理中,每个worker都会产生一份kv 相关输出,但scheduler只需要统一后的结果.可以理解为多卡worker输出->聚合成rank0的统一视图
 
     def __init__(self, expected_finished_count: int):
         # Complete transfer tracker. Used to track finished requests
         # [req_id -> n_remaining_workers]
-        self._recv_remaining_count = dict[str, int]()
-        self._send_remaining_count = dict[str, int]()
-        self._expected_finished_count = expected_finished_count
+        self._recv_remaining_count = dict[str, int]()                               #记录每个request还需要多少worker才算发送完成
+        self._send_remaining_count = dict[str, int]()                               #记录每个request还需要多少worker才算接收完成
+        self._expected_finished_count = expected_finished_count                     #默认期望完成数(通常等于world size)
 
     @classmethod
     def from_connector(cls, connector: "KVConnectorBase", world_size: int):
-        return cls(connector.get_finished_count() or world_size)
+        return cls(connector.get_finished_count() or world_size)                    #从 connector 创建 aggregator。优先用connector的finished_count,如果没有则fallback到world_size
 
     def aggregate(
-        self, outputs: list[ModelRunnerOutput | None], output_rank: int = 0
+        self, outputs: list[ModelRunnerOutput | None], output_rank: int = 0         
     ) -> ModelRunnerOutput | None:
-        if not outputs[output_rank]:
+        """
+        核心函数: 聚合多个worker的ModelRunnerOutput
+        参数:outputs:所有worker的输出列表
+             output_rank:选择哪个worker的output作为主输出返回(通常是rank0)
+        返回:聚合后的ModelRunnerOutput(只返回一个统一结果)
+        Example:
+        >>> # 假设 TP=2，每个请求需要2个worker都确认完成
+        >>> # 第1轮: out0={"req_A"}, out1=None → req_A:2→1(未完成)
+        >>> result = aggregator.aggregate([out0, out1]); result.kv_connector_output.finished_sending is None
+        >>> # 第2轮: out0=None, out1={"req_A","req_B"} → req_A:1→0(完成), req_B:2→1(未完成)
+        >>> result = aggregator.aggregate([out0, out1]); result.kv_connector_output.finished_sending == {"req_A"}
+        >>> # 未完成的req_B会继续保存在内部计数器中，等待下一轮被其他worker补齐
+        """
+        
+        if not outputs[output_rank]:                                                #如果目标worker没有输出,直接返回None
             return None
 
         # Aggregate kv_connector_output from all workers
@@ -69,21 +83,26 @@ class KVOutputAggregator:
             remaining_count_dict: dict[str, int],
             finished_set: set[str],
         ) -> None:
+            """
+            更新request完成状态计数器
+            核心逻辑:每个 worker 报告“我完成了某个 request 的发送/接收,做计数-1 ,当减到0,说明所有worker都完成了.
+            """
             for req_id in req_ids or ():
-                remaining_count = remaining_count_dict.get(
+                remaining_count = remaining_count_dict.get(                          # 如果没有这个request 就默认
                     req_id, self._expected_finished_count
                 )
-                remaining_count_dict[req_id] = remaining_count - 1
+                remaining_count_dict[req_id] = remaining_count - 1                   # 减少一个 worker 的完成计数
                 if remaining_count_dict[req_id] == 0:
                     finished_set.add(req_id)
                     del remaining_count_dict[req_id]
-
+        # ===================== 初始化聚合结果容器 =====================
         finished_sending = set[str]()
         finished_recving = set[str]()
         aggregated_kv_connector_stats = None
         combined_kv_cache_events = None
         invalid_block_ids = set[int]()
-        for model_runner_output in outputs:
+        
+        for model_runner_output in outputs:                                         # ===================== 遍历所有 worker 输出 =====================
             assert model_runner_output is not None
             kv_output = model_runner_output.kv_connector_output
             if not kv_output:

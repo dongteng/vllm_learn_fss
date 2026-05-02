@@ -35,7 +35,7 @@ class BaseCacheStats:
 class CachingMetrics:
     """Metrics for caching with a hit rate of the most recent N requests.
     Args:
-        interval: The number of the most recent requests to aggregate. #只统计最近1000个请求，原因很简单：如果统计所有历史请求，那指标就失真了
+        interval: The number of the most recent requests to aggregate.
             Defaults to 1000.
     """
 
@@ -45,8 +45,8 @@ class CachingMetrics:
         self.max_recent_requests = max_recent_requests
         # The current aggregated values.
         self.aggregated_requests = 0
-        self.aggregated_query_total = 0 #查询次数
-        self.aggregated_query_hit = 0  #命中次数
+        self.aggregated_query_total = 0
+        self.aggregated_query_hit = 0
 
         # A deque of (requests, queries, hits) for the most recent requests.
         self.query_queue = deque[tuple[int, int, int]]()
@@ -115,11 +115,11 @@ class CachingMetrics:
 class PrefixCacheStats(BaseCacheStats):
     """
     Stores prefix cache hit statistics.
-    - `reset`: Whether `reset_prefix_cache` was invoked.  表示是否调用了 reset_prefix_cache（重置前缀缓存）。
-    - `queries`: Refers to the number of tokens that were queried. 统计本次更新中被查询的 token 数量。
+    - `reset`: Whether `reset_prefix_cache` was invoked.
+    - `queries`: Refers to the number of tokens that were queried.
     """
 
-    preempted_requests: int = 0 #本次调度中，有多少个请求是"之前被抢占的请求"，“被抢占”意思是：某个请求之前被暂停或没完成，这次调度又回来了。
+    preempted_requests: int = 0 #本次更新中，有多少个请求是"之前被抢占的请求"
     """The number of previously preempted requests in this update."""
 
     preempted_queries: int = 0 #：所有被抢占过的请求，在本次更新中总共查询了多少个 token（尝试匹配前缀缓存）
@@ -130,6 +130,18 @@ class PrefixCacheStats(BaseCacheStats):
 
     def record(self, num_tokens: int, num_hits: int, preempted: bool) -> None:
         """Aggregate request information into the stats.
+        每次有一个请求处理完前缀缓存匹配后，就调用这个方法来累加统计
+        num_tokens：这个请求查询了多少个 token（尝试匹配前缀）
+        num_hits：这个请求命中了多少个 token（成功复用缓存）
+        preempted：这个请求是不是之前被抢占过的（是 True / 否 False）
+        为什么分开统计？
+        因为在 vLLM 的调度器里：
+        新请求：通常从头 prefill，前缀缓存命中率较低
+        被抢占后恢复的请求：之前已经 prefill 过一部分，恢复时有大量 token 可以从 prefix cache 命中
+        如果混在一起统计，命中率会被“被抢占请求”拉高，看起来“缓存很强”，但实际上新请求的体验没改善
+        分开统计后，vLLM 可以更准确地评估：
+        新请求的前缀缓存效果（更能反映真实用户体验）
+        抢占机制对缓存命中的影响（评估调度策略好坏）
         """
         if preempted:
             # Previously preempted request
@@ -258,7 +270,7 @@ class IterationStats:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
 
-    def update_from_output( #当引擎核心（EngineCore）刚刚为某个请求生成了新的token后，把这次生成的各种指标反馈并累加刀本次迭代的全局统计（IterationStats）+这个请求自己的统计（RequestStateStats）
+    def update_from_output(
         self,
         output: "EngineCoreOutput",
         engine_core_timestamp: float,

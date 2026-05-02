@@ -46,23 +46,23 @@ class Request:
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
     ) -> None:
         self.request_id = request_id
-        self.client_index = client_index
-        self.priority = priority
+        self.client_index = client_index                                                      #客户端索引（多客户端场景用）
+        self.priority = priority                                                              #调度优先级
         self.sampling_params = sampling_params
         self.pooling_params = pooling_params
         # Because of LoRA, the eos token id can be different for each request.
         self.eos_token_id = eos_token_id
-        self.lora_request = lora_request
-        self.structured_output_request = StructuredOutputRequest.from_sampling_params(
+        self.lora_request = lora_request                                                      #lora请求（动态加载adapter）
+        self.structured_output_request = StructuredOutputRequest.from_sampling_params(        #从 sampling_params 推导结构化输出请求（如 JSON schema / constrained decoding）
             sampling_params
         )
         self.arrival_time = arrival_time if arrival_time is not None else time.time()
 
-        self.status = RequestStatus.WAITING
-        self.events: list[EngineCoreEvent] = []
-        self.stop_reason: int | str | None = None
+        self.status = RequestStatus.WAITING                                                   #初始状态：等待调度
+        self.events: list[EngineCoreEvent] = []                                               #生命周期事件记录（trace/debug用）
+        self.stop_reason: int | str | None = None                                             #停止原因
 
-        # P/D: Connector-specific KV transfer parameters.
+        # P/D: Connector-specific KV transfer parameters.                                     # KV 传输相关参数（用于跨节点 KV cache 传输）
         self.kv_transfer_params: dict[str, Any] | None = None
 
         if pooling_params is not None:
@@ -73,75 +73,75 @@ class Request:
             assert sampling_params.max_tokens is not None
             self.max_tokens = sampling_params.max_tokens
             if self.structured_output_request is not None:
-                self.status = RequestStatus.WAITING_FOR_FSM
+                self.status = RequestStatus.WAITING_FOR_FSM                                    #如果是结构化输出->先等FSM（grammar）准备好
 
-            if sampling_params.extra_args is not None:
+            if sampling_params.extra_args is not None:                                         #从extra_args中提取kv transfer参数（用于分布式kv）
                 self.kv_transfer_params = sampling_params.extra_args.get(
                     "kv_transfer_params"
                 )
         else:
             raise ValueError("sampling_params and pooling_params can't both be unset")
 
-        self.prompt_token_ids = prompt_token_ids
-        self.prompt_embeds = prompt_embeds
-        self.num_prompt_tokens = length_from_prompt_token_ids_or_embeds(
+        self.prompt_token_ids = prompt_token_ids                                                #输入token ids
+        self.prompt_embeds = prompt_embeds                                                      #或直接输入embedding（跳tokenizer）
+        self.num_prompt_tokens = length_from_prompt_token_ids_or_embeds(                        #计算prompt token数量（支持ids或embds）
             prompt_token_ids, prompt_embeds
         )
-        self._output_token_ids: list[int] = []
-        self._all_token_ids: list[int] = (
+        self._output_token_ids: list[int] = []                                                  #已生成token（内部可变）
+        self._all_token_ids: list[int] = (                                                      #所有token = prompt + output
             self.prompt_token_ids.copy()
             if self.prompt_token_ids is not None
-            else [0] * self.num_prompt_tokens
+            else [0] * self.num_prompt_tokens                                                   #没有ids就用占位符
         )
 
         # Used in async scheduling.
-        self.num_output_placeholders = 0
+        self.num_output_placeholders = 0                                                        #异步生成占位数
         # Used in forced preemption (reset_prefix_cache) with async scheduling.
-        self.discard_latest_async_tokens = False
+        self.discard_latest_async_tokens = False                                                #强制抢占时丢弃未完成token
 
-        self.spec_token_ids: list[int] = []
-        self.num_computed_tokens = 0
-        self.cache_salt: str | None = cache_salt
+        self.spec_token_ids: list[int] = []                                                     #投机解码用
+        self.num_computed_tokens = 0                                                            #已经计算的token数
+        self.cache_salt: str | None = cache_salt                                                #cache隔离标识（避免冲突）
 
         # Multi-modal related
         self.mm_features = mm_features or []
         self.num_encoder_inputs = len(self.mm_features)
         self.has_encoder_inputs = self.num_encoder_inputs > 0
 
-        # Read-only views
-        # Prevent directly appending to these lists since
+        # Read-only views                                                                        #只读视图
+        # Prevent directly appending to these lists since                                        防止外部直接修改内部list （必须同步更新）
         # they should also be updated simultaneously.
         self.output_token_ids = ConstantList(self._output_token_ids)
         self.all_token_ids = ConstantList(self._all_token_ids)
         # trace_headers
-        self.trace_headers = trace_headers
-        # State
-        # The number of tokens with prefix cache hits.
+        self.trace_headers = trace_headers                                                       #tracing（链路追踪/日志）
+        # State         # =====================  cache / 调度统计 ===================== 
+        # The number of tokens with prefix cache hits.                                           #prefix cache命中token数据
         self.num_cached_tokens = -1
 
         # The number of NaNs in logits. A value greater than 0
         # indicates that the output is corrupted
-        self.num_nans_in_logits = 0
+        self.num_nans_in_logits = 0                                                              #logits中NaN数（>0说明模型异常）
 
         # The number of requests being preempted by the scheduler
-        self.num_preemptions = 0
+        self.num_preemptions = 0                                                                 #被抢占次数
 
-        # The number of tokens that have been computed remotely.
+        # The number of tokens that have been computed remotely.                                 #在远端算过的token数
         self.num_external_computed_tokens = 0
 
-        self.block_hashes: list[BlockHash] = []
+        self.block_hashes: list[BlockHash] = []                                                  ## prompt 对应的 block hash, 为啥是一个list  是因为prompt被切成多个block，每个block对应一个hash，多一事多个BlockHash
         self.get_hash_new_full_blocks: Callable[[], list[BlockHash]] | None = None
         if block_hasher is not None:
-            self.get_hash_new_full_blocks = partial(block_hasher, self)
-            self.block_hashes = self.get_hash_new_full_blocks()
+            self.get_hash_new_full_blocks = partial(block_hasher, self)                          #绑定hash计算函数（延迟调用）
+            self.block_hashes = self.get_hash_new_full_blocks()                                  #立即计算已有blocks的hash(用于prefix cache)
 
-        self.skip_reading_prefix_cache = self.get_skip_reading_prefix_cache()
+        self.skip_reading_prefix_cache = self.get_skip_reading_prefix_cache()                    #是否跳过prefix cache（某些场景禁用）
 
     @classmethod
     def from_engine_core_request(
         cls,
         request: EngineCoreRequest,
-        block_hasher: Callable[["Request"], list["BlockHash"]] | None,
+        block_hasher: Callable[["Request"], list["BlockHash"]] | None,              #这个函数的目的不是简单“换个名字”，而是把“外部输入请求（EngineCoreRequest）”转换成“调度系统内部可运行的 Request 对象”
     ) -> "Request":
         return cls(
             request_id=request.request_id,

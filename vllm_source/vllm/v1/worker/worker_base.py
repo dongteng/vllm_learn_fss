@@ -36,6 +36,11 @@ class WorkerBase:
     """Worker interface that allows vLLM to cleanly separate implementations for
     different hardware. Also abstracts control plane communication, e.g., to
     communicate request metadata to other workers.
+    Worker的基类（接口类），用于实现vLLM对不同硬件的后端抽象。
+    主要作用：
+    1.统一不同硬件（CPU GPU TPU）的Worker实现接口
+    2.抽象控制平面通信（control plane communication），比如在不同worker之间传递请求元数据（request metadata）等。
+    3.作为所有Worker实现的基类，定义了Worker需要实现的核心方法（如init_device、execute_model、sample_tokens等），以及一些通用方法（如get_kv_cache_spec、add_lora等）。
     """
 
     def __init__(
@@ -50,11 +55,11 @@ class WorkerBase:
         Initialize common worker components.
 
         Args:
-            vllm_config: Complete vLLM configuration
-            local_rank: Local device index
-            rank: Global rank in distributed setup
-            distributed_init_method: Distributed initialization method
-            is_driver_worker: Whether this worker handles driver
+            vllm_config: Complete vLLM configuration                    vLLM 的完整配置对象，包含模型、并行、调度、缓存等所有配置
+            local_rank: Local device index                              本地设备编号（当前进程在本地机器上的 rank，常用于多 GPU）
+            rank: Global rank in distributed setup                      
+            distributed_init_method: Distributed initialization method  分布式初始化方法（如 "env://", "tcp://..." 等）
+            is_driver_worker: Whether this worker handles driver        是否为 Driver Worker（主 Worker），负责协调和最终结果收集
                 responsibilities
         """
         self.vllm_config = vllm_config
@@ -74,6 +79,7 @@ class WorkerBase:
 
         self.current_platform = current_platform
 
+        #分布式相关信息
         self.parallel_config.rank = rank
         self.local_rank = local_rank
         self.rank = rank
@@ -85,41 +91,43 @@ class WorkerBase:
         self.model_runner: nn.Module | None = None
 
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
-        """Get specifications for KV cache implementation."""
+        """Get specifications for KV cache implementation.返回当前 Worker 所使用的 KV Cache 规格信息（块大小、数据类型等）"""
         raise NotImplementedError
 
     def compile_or_warm_up_model(self) -> None:
-        """Prepare model for execution through compilation/warmup."""
+        """Prepare model for execution through compilation/warmup.编译或预热模型（用于 torch.compile、CUDA Graph 等优化）"""
         raise NotImplementedError
 
     def check_health(self) -> None:
-        """Basic health check (override for device-specific checks)."""
+        """Basic health check (override for device-specific checks).基础健康检查，子类可重写实现设备特定的健康检查逻辑"""
         return
 
     def init_device(self) -> None:
-        """Initialize device state, such as loading the model or other on-device
+        """Initialize device state, such as loading the model or other on-device  始化设备相关状态，包括加载模型、分配显存等关键操作
         memory allocations.
         """
         raise NotImplementedError
 
     def initialize_cache(self, num_gpu_blocks: int, num_cpu_blocks: int) -> None:
-        """Initialize the KV cache with the given size in blocks."""
+        """Initialize the KV cache with the given size in blocks.根据给定的 GPU/CPU block 数量初始化 KV Cache"""
         raise NotImplementedError
 
     def reset_mm_cache(self) -> None:
+        """重置多模态（Multi-Modal）缓存，例如图像、视频等嵌入缓存"""
         reset_fn = getattr(self.model_runner, "reset_mm_cache", None)
         if callable(reset_fn):
             reset_fn()
 
-    def get_model(self) -> nn.Module:
+    def get_model(self) -> nn.Module: 
+        """获取当前 Worker 加载的模型实例"""
         raise NotImplementedError
 
     def apply_model(self, fn: Callable[[nn.Module], _R]) -> _R:
-        """Apply a function on the model inside this worker."""
+        """Apply a function on the model inside this worker.在当前 Worker 的模型上应用传入的函数，常用于模型参数修改等操作"""
         return fn(self.get_model())
 
     def load_model(self) -> None:
-        """Load model onto target device."""
+        """Load model onto target device. 将模型加载到目标设备（GPU/CPU 等）"""
         raise NotImplementedError
 
     def execute_model(
@@ -130,18 +138,23 @@ class WorkerBase:
 
         Note that this design may be changed in future if/when structured outputs
         parallelism is re-architected.
+        执行模型前向计算（forward）。
+        注意：
+        - 如果该方法返回 None，则必须立即调用 sample_tokens() 来获取最终输出。
+        - 这种设计主要为了支持某些特殊并行策略（未来结构化输出并行可能改变此设计）。
         """
         raise NotImplementedError
 
     def sample_tokens(
         self, grammar_output: GrammarOutput
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
-        """Should be called immediately after execute_model iff it returned None."""
+        """Should be called immediately after execute_model iff it returned None.执行采样（sampling）操作。
+        仅当 execute_model() 返回 None 时才需要调用此方法。"""
         raise NotImplementedError
 
     def get_cache_block_size_bytes(self) -> int:
         """Return the size of a single cache block, in bytes. Used in
-        speculative decoding.
+        speculative decoding.回单个 KV Cache block 的大小（字节），主要用于 speculative decoding 计算
         """
         raise NotImplementedError
 
@@ -159,11 +172,11 @@ class WorkerBase:
 
     @property
     def vocab_size(self) -> int:
-        """Get vocabulary size from model configuration."""
+        """Get vocabulary size from model configuration.获取模型的词表大小（vocabulary size）。"""
         return self.model_config.get_vocab_size()
 
     def shutdown(self) -> None:
-        """Clean up resources held by the worker."""
+        """Clean up resources held by the worker.清理 Worker 占用的资源（模型、缓存、进程等）。"""
         return
 
 

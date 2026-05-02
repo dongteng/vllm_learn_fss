@@ -183,10 +183,10 @@ class DPMetadata:
 
 
 @dataclass
-class ForwardContext: #一次forward运行时的全局环境描述对象
+class ForwardContext:
     # copy from vllm_config.compilation_config.static_forward_context
-    no_compile_layers: dict[str, Any]                       #记录哪些 layer 不允许使用 torch.compile 或 CUDA Graph 编译。
-    attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] #attention 层运行所需要的元信息。
+    no_compile_layers: dict[str, Any]
+    attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]]
     """
     Type Dict[str, AttentionMetadata] for v1, map from layer_name of each 
     attention layer to its attention metadata
@@ -197,13 +197,13 @@ class ForwardContext: #一次forward运行时的全局环境描述对象
     # TODO: remove after making all virtual_engines share the same kv cache
     virtual_engine: int  # set dynamically for each forward pass
     # set dynamically for each forward pass
-    dp_metadata: DPMetadata | None = None                     #Data Parallel 相关信息。
+    dp_metadata: DPMetadata | None = None
     # determine the cudagraph style at runtime to be FULL, PIECEWISE, or NONE.
     # by default NONE, no cudagraph is used.
-    cudagraph_runtime_mode: CUDAGraphMode = CUDAGraphMode.NONE#控制是否使用 CUDA Graph 加速。
-    batch_descriptor: BatchDescriptor | None = None           #CUDA Graph 必须知道 batch 的 shape。
+    cudagraph_runtime_mode: CUDAGraphMode = CUDAGraphMode.NONE
+    batch_descriptor: BatchDescriptor | None = None
 
-    ubatch_slices: UBatchSlices | None = None                 #有时 vLLM 会把一个 batch 再拆成更小的 microbatch：
+    ubatch_slices: UBatchSlices | None = None
 
     def __post_init__(self):
         assert self.cudagraph_runtime_mode.valid_runtime_modes(), (

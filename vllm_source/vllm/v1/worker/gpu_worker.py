@@ -66,6 +66,11 @@ if TYPE_CHECKING:
 
 
 class Worker(WorkerBase):
+    """
+    GPU Worker的具体实现类(最常用Worker)
+    继承自WorkerBase,实现了GPU(CUDA/ROCm)平台下worker需要的功能,包括：模型加载、设备初始化、kv cache管理、profiler支持以及睡眠模式等
+    """
+    
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -82,23 +87,23 @@ class Worker(WorkerBase):
             is_driver_worker=is_driver_worker,
         )
 
-        # configure float32 matmul precision according to vLLM env.
+        # configure float32 matmul precision according to vLLM env.  根据vLLM环境变量配置float32矩阵乘法精度(影响性能和数值稳定性)
         precision = envs.VLLM_FLOAT32_MATMUL_PRECISION
         torch.backends.cuda.matmul.fp32_precision = precision
 
-        if self.model_config.trust_remote_code:
+        if self.model_config.trust_remote_code:                      #如果模型配置许信任远程代码,则提前初始化 HuggingFace 相关模块缓存  避免在 CUDA 初始化后再导入 torch 导致的问题)
             # note: lazy import to avoid importing torch before initializing
             from vllm.utils.import_utils import init_cached_hf_modules
 
             init_cached_hf_modules()
 
-        # Buffers saved before sleep
+        # Buffers saved before sleep                                  ## 用于 sleep 模式(尤其是 level=2)时保存模型 buffer 的副本,防止模型被卸载后丢失重要参数
         self._sleep_saved_buffers: dict[str, torch.Tensor] = {}
 
-        # Torch/CUDA profiler. Enabled and configured through profiler_config.
+        # Torch/CUDA profiler. Enabled and configured through profiler_config. torch/cuda profiler支持,可通过profiler_config启用,用于性能分析和调试
         self.profiler: Any | None = None
         profiler_config = vllm_config.profiler_config
-        if profiler_config.profiler == "torch":
+        if profiler_config.profiler == "torch":                        #Torch Profiler(推荐用于详细的 CPU + CUDA 性能分析)
             worker_name = f"{vllm_config.instance_id}-rank-{self.rank}"
             self.profiler = TorchProfilerWrapper(
                 profiler_config,
@@ -107,13 +112,20 @@ class Worker(WorkerBase):
                 activities=["CPU", "CUDA"],
             )
         elif profiler_config.profiler == "cuda":
-            self.profiler = CudaProfilerWrapper(profiler_config)
+            self.profiler = CudaProfilerWrapper(profiler_config)        ## CUDA Profiler(更轻量,专注于 CUDA kernel 分析)
         else:
             self.profiler = None
 
-        self.use_v2_model_runner = envs.VLLM_USE_V2_MODEL_RUNNER
+        self.use_v2_model_runner = envs.VLLM_USE_V2_MODEL_RUNNER        #是否使用 v2 版本的 ModelRunner(vLLM 新架构)
 
     def sleep(self, level: int = 1) -> None:
+        """进入睡眠模式,释放 GPU 显存以支持更多并发实例或节省资源。
+
+        Args:
+            level: 睡眠等级
+                   - 1: 仅卸载权重(weights),保留 KV Cache
+                   - 2: 卸载权重并保存 buffer 到 CPU,释放更多显存"""
+        
         from vllm.device_allocator.cumem import CuMemAllocator
 
         free_bytes_before_sleep = torch.cuda.mem_get_info()[0]
@@ -124,9 +136,10 @@ class Worker(WorkerBase):
             self._sleep_saved_buffers = {
                 name: buffer.cpu().clone() for name, buffer in model.named_buffers()
             }
-
+        # 调用 CuMemAllocator 执行实际的睡眠操作(支持按 tag 选择性卸载)
         allocator = CuMemAllocator.get_instance()
         allocator.sleep(offload_tags=("weights",) if level == 1 else tuple())
+        # 统计并记录睡眠前后显存变化
         free_bytes_after_sleep, total = torch.cuda.mem_get_info()
         freed_bytes = free_bytes_after_sleep - free_bytes_before_sleep
         used_bytes = total - free_bytes_after_sleep
@@ -138,11 +151,23 @@ class Worker(WorkerBase):
         )
 
     def wake_up(self, tags: list[str] | None = None) -> None:
-        from vllm.device_allocator.cumem import CuMemAllocator
+        """从睡眠模式(sleep)中唤醒 Worker,恢复模型和缓存的运行状态。
+
+        该方法与 `sleep()` 配对使用,用于在需要继续推理时快速恢复 GPU 资源。
+
+        Args:
+            tags: 需要唤醒的资源标签列表。
+                  - 如果为 None,则唤醒所有已休眠的资源(weights + kv_cache 等)
+                  - 常见标签： "weights", "kv_cache"""
+        
+        from vllm.device_allocator.cumem import CuMemAllocator      ## 调用底层 CuMemAllocator 执行唤醒操作(将之前卸载到 CPU 或其他内存的资源重新加载回 GPU)
 
         allocator = CuMemAllocator.get_instance()
         allocator.wake_up(tags)
 
+        # ------------------- 恢复 Level 2 睡眠时保存的模型 buffers -------------------
+        # Level 2 睡眠时会把模型的 named_buffers() 保存到 CPU,
+        # 这里需要把它们重新拷贝回 GPU 的模型参数中。
         # Restore the buffers after level 2 sleep
         if len(self._sleep_saved_buffers):
             model = self.model_runner.model
@@ -179,10 +204,26 @@ class Worker(WorkerBase):
         self.cache_config.num_cpu_blocks = num_cpu_blocks
 
     def init_device(self):
+        """
+        初始化当前Worker的设备环境(主要针对GPU)
+        这是 Worker 启动过程中最重要的初始化步骤之一,主要完成：
+        1. 设置 CUDA 设备
+        2. 处理数据并行(Data Parallel)下的 local_rank 调整
+        3. 初始化分布式环境(NCCL)
+        4. 清理内存并记录初始内存快照
+        5. 创建 ModelRunner(模型执行引擎)
+        
+        """
+        
         device = self.device_config.device
         if isinstance(device, torch.device) and device.type == "cuda":
+            # Ray 会设置 NCCL_ASYNC_ERROR_HANDLING 环境变量,导致 CUDA Graph 构建失败
+            # 这里主动移除该环境变量,避免冲突
             # This env var set by Ray causes exceptions with graph building.
             os.environ.pop("NCCL_ASYNC_ERROR_HANDLING", None)
+            
+            # ====================== 数据并行 (DP) local_rank 调整 ======================
+            # 在启用数据并行且不使用 Ray/外部启动器的情况下,需要重新计算 local_rank
             if (
                 self.parallel_config.data_parallel_size > 1
                 and self.parallel_config.data_parallel_size_local > 0
@@ -191,17 +232,18 @@ class Worker(WorkerBase):
                 and self.vllm_config.parallel_config.data_parallel_backend != "ray"
                 and self.vllm_config.parallel_config.nnodes_within_dp == 1
             ):
-                # Use local DP rank if available, otherwise use global DP rank.
+                # Use local DP rank if available, otherwise use global DP rank.  # 优先使用本地 DP rank,否则使用全局 DP rank
                 dp_local_rank = self.parallel_config.data_parallel_rank_local
                 if dp_local_rank is None:
                     dp_local_rank = self.parallel_config.data_parallel_rank
 
+                # TP + PP 的世界大小(一个 DP 组内包含的进程数)
                 tp_pp_world_size = (
                     self.parallel_config.pipeline_parallel_size
                     * self.parallel_config.tensor_parallel_size
                 )
 
-                # DP_LOCAL_RANK * TP_PP_WORLD_SIZE + TP_LOCAL_RANK
+                # DP_LOCAL_RANK * TP_PP_WORLD_SIZE + TP_LOCAL_RANK  # 调整 local_rank：DP_LOCAL_RANK * (TP*PP) + 原 local_rank
                 self.local_rank += dp_local_rank * tp_pp_world_size
                 assert self.local_rank < torch.cuda.device_count(), (
                     f"DP adjusted local rank {self.local_rank} is out of bounds. "
@@ -214,11 +256,16 @@ class Worker(WorkerBase):
                     f"be less than or equal to the number of visible devices "
                     f"({visible_device_count})."
                 )
+                
+            # 设置当前 Worker 使用的 CUDA 设备
             self.device = torch.device(f"cuda:{self.local_rank}")
             current_platform.set_device(self.device)
-
+            # 检查当前设备是否支持模型所需的 dtype(如 fp8、bf16 等)
             current_platform.check_if_supports_dtype(self.model_config.dtype)
 
+            # ====================== 初始化分布式环境 ======================
+            # 必须在记录内存快照之前初始化分布式环境(NCCL),
+            # 因为 NCCL 初始化会分配通信缓冲区,影响可用显存计算
             # Initialize the distributed environment BEFORE taking
             # memory snapshot
             # This ensures NCCL buffers are allocated before we measure
@@ -231,24 +278,30 @@ class Worker(WorkerBase):
                 current_platform.dist_backend,
             )
 
-            # Set random seed.
+            # Set random seed. 设置随机种子,保证各 Worker 之间随机性一致
             set_random_seed(self.model_config.seed)
 
-            # Now take memory snapshot after NCCL is initialized
+            # ====================== 内存管理 ======================
+            # Now take memory snapshot after NCCL is initialized 
+            # 清理 Python GC 和 CUDA 缓存,确保内存快照准确
             gc.collect()
             torch.cuda.empty_cache()
 
-            # take current memory snapshot
+            # take current memory snapshot # 记录初始化时的显存快照,用于后续计算 KV Cache 可分配数量
             self.init_snapshot = init_snapshot = MemorySnapshot(device=self.device)
             self.requested_memory = request_memory(init_snapshot, self.cache_config)
         else:
             raise RuntimeError(f"Not support device type: {self.device_config.device}")
 
-        # Initialize workspace manager
+        # Initialize workspace manager # ====================== 初始化工作空间管理器 ======================
+        # num_ubatches：用于支持 Dynamic Batch Overlap(DBO)时的微批次数量
         num_ubatches = 2 if self.vllm_config.parallel_config.enable_dbo else 1
         init_workspace_manager(self.device, num_ubatches)
 
         # Construct the model runner
+        
+        # ====================== 构造 ModelRunner ======================
+        # ModelRunner 是实际负责模型 forward、sampling 等核心计算的引擎
         if self.use_v2_model_runner:
             from vllm.v1.worker.gpu.model_runner import (
                 GPUModelRunner as GPUModelRunnerV2,
@@ -576,25 +629,42 @@ class Worker(WorkerBase):
     def execute_model(
         self, scheduler_output: "SchedulerOutput"
     ) -> ModelRunnerOutput | None:
+        """执行模型前向计算(forward pass)。
+
+        这是 GPU Worker 中最核心的方法之一,负责：
+        - 判断是否需要真正执行模型计算
+        - 处理 Pipeline Parallelism (PP) 中的中间 tensor 传递
+        - 调用 ModelRunner 执行实际的模型推理
+        - 在 PP 多阶段时负责发送/接收中间结果
+
+        Returns:
+            ModelRunnerOutput | None:
+                - 如果是最后一个 PP stage(或非 PP),返回最终的 ModelRunnerOutput
+                - 如果是中间 PP stage,则返回 None(表示需要继续调用 sample_tokens"""
+        
+        
         intermediate_tensors = None
-        forward_pass = scheduler_output.total_num_scheduled_tokens > 0
+        forward_pass = scheduler_output.total_num_scheduled_tokens > 0      # 是否需要真正执行模型 forward(如果本次没有调度任何 token,则跳过)
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        all_gather_tensors = {}
+        all_gather_tensors = {}                                             #用于pp+tp场景下决定哪些tensor需要all-gather
+        compilation_config = self.vllm_config.compilation_config
         compilation_config = self.vllm_config.compilation_config
         parallel_config = self.vllm_config.parallel_config
 
+        # ====================== Pipeline Parallelism 特殊处理 ======================
+        # 当启用 Pipeline Parallel + Sequence Parallel (SP) 时,需要提前准备 batch 信息
         if (
             parallel_config.pipeline_parallel_size > 1
             and compilation_config.pass_config.enable_sp
             and forward_pass
         ):
-            # currently only supported by V1 GPUModelRunner
+            # currently only supported by V1 GPUModelRunner 目前仅v1支持该特性
             assert not self.use_v2_model_runner
             num_scheduled_tokens_np = np.array(
                 list(scheduler_output.num_scheduled_tokens.values()),
                 dtype=np.int32,
             )
-            # TODO(lucas): This is pretty gross; ideally we should only ever call
+            # TODO(lucas): This is pretty gross; ideally we should only ever call   
             # `_determine_batch_execution_and_padding` once (will get called again
             # in `execute_model`) but this requires a larger refactor of PP.
             _, batch_desc, _, _, _ = (
@@ -606,12 +676,15 @@ class Worker(WorkerBase):
                     use_cascade_attn=False,  # TODO(lucas): Handle cascade attention
                 )
             )
+            
+            #判断residual连接是否需要通过all-gather进行传播
             all_gather_tensors = {
                 "residual": not is_residual_scattered_for_sp(
                     self.vllm_config, batch_desc.num_tokens
                 )
             }
-
+        # ====================== 非首级 PP Rank 接收中间 tensor ======================
+        # 如果不是第一个 PP stage(不是 first rank),则需要从上一个 stage 接收中间 tensor
         if forward_pass and not get_pp_group().is_first_rank:
             tensor_dict = get_pp_group().recv_tensor_dict(
                 all_gather_group=get_tp_group(),
@@ -620,20 +693,24 @@ class Worker(WorkerBase):
             assert tensor_dict is not None
             intermediate_tensors = IntermediateTensors(tensor_dict)
 
+        # ====================== 执行模型前向计算 ======================
         with self.annotate_profile(scheduler_output):
             output = self.model_runner.execute_model(
                 scheduler_output, intermediate_tensors
             )
+            # 如果 ModelRunner 直接返回了最终输出(非 PP 或最后一个 stage),则直接返回
             if isinstance(output, ModelRunnerOutput | NoneType):
                 return output
 
+        # ====================== 中间 PP stage 的处理 ======================
+        # 如果走到这里,说明当前是 PP 的中间 stage,需要把中间 tensor 发送给下一个 stage
         assert isinstance(output, IntermediateTensors)
         parallel_config = self.vllm_config.parallel_config
         assert (
             parallel_config.distributed_executor_backend != "external_launcher"
             and not get_pp_group().is_last_rank
         )
-
+        #将中间tensor发送给下一个PP stage
         get_pp_group().send_tensor_dict(
             output.tensors,
             all_gather_group=get_tp_group(),

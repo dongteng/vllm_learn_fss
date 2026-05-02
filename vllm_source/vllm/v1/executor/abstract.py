@@ -262,7 +262,7 @@ class Executor(ABC):
         self.collective_rpc("shutdown")
 
     def init_kv_output_aggregator(self, connector: "KVConnectorBase") -> None:
-        """Init KVOutputAggregator"""
+        """Init KVOutputAggregator  初始化kv输出聚合器，用于在分布式推理场景下，将各个rank产生的kv数据进行收集、整理或合并，以便后续的处理或存储"""
         self.kv_output_aggregator = KVOutputAggregator.from_connector(
             connector, self.parallel_config.world_size
         )

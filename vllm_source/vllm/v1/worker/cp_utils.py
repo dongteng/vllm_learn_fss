@@ -11,9 +11,6 @@ else:
 
 
 def check_attention_cp_compatibility(vllm_config: VllmConfig) -> None:
-    """
-    启动前安全检查
-    """
     pcp_size = vllm_config.parallel_config.prefill_context_parallel_size
     dcp_size = vllm_config.parallel_config.decode_context_parallel_size
     interleave_size = vllm_config.parallel_config.cp_kv_cache_interleave_size

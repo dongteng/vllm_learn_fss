@@ -33,16 +33,16 @@ AddedRequest = tuple[int, SamplingParams, list[int] | None, list[int]]
 MovedRequest = tuple[int, int, MoveDirectionality]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True)                                                                     #不可变数据类
 class BatchUpdate:
-    """Persistent batch state change info for logitsprocs"""
+    """Persistent batch state change info for logitsprocs"""                                #这一step中persistent batch的变化信息(供logits processors使用)
 
-    batch_size: int  # Current num reqs in batch
+    batch_size: int  # Current num reqs in batch                                            #当前batch的大小
 
     # Metadata for requests added to, removed from, and moved
     # within the persistent batch.
     #
-    # Key assumption: the `output_tok_ids` list (which is an element of each
+    # Key assumption: the `output_tok_ids` list (which is an element of each                #关键假设:
     # tuple in `added`) is a reference to the request's running output tokens
     # list; via this reference, the logits processors always see the latest
     # list of generated output tokens.

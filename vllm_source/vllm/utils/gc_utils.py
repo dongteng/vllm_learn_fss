@@ -97,7 +97,12 @@ def freeze_gc_heap() -> None:
     """
     Freeze all objects tracked by the garbage collector. It should be invoked
     after server init / warmup, to reduce GC overhead from static objects
-    during serving time.
+    during serving time. 
+    冻结垃圾回收器（GC）当前跟踪的所有对象
+    作用：
+        在vllm服务启动完成、预热（warmup）结束后调用，把启动阶段产生的“静态对象”（几乎不会再变化的对象）冻结起来，从而大幅减少服务运行期间的 GC（垃圾回收）开销，避免服务卡顿。
+    为什么需要这个：
+        Python 的垃圾回收器会定期扫描所有对象。服务启动时会创建大量配置、模型元数据、缓冲区等对象，这些对象在运行时几乎不会被修改。如果不冻结它们，GC 会反复扫描这些“死对象”，浪费 CPU 时间。调用 freeze 后，这些对象会被标记为“永久存活”，GC 不再扫描它们，显著提升性能。
     """
     # Ensure all static objects are pushed down to the oldest generation for
     # freeze

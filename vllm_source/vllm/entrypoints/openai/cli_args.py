@@ -289,9 +289,9 @@ def validate_parsed_serve_args(args: argparse.Namespace):
     validate_chat_template(args.chat_template)
 
     # Enable auto tool needs a tool call parser to be valid
-    if args.enable_auto_tool_choice and not args.tool_call_parser: #如果你开了自动工具调用（--enable-auto-tool-choice），就必须同时指定工具调用解析器（--tool-call-parser）。
+    if args.enable_auto_tool_choice and not args.tool_call_parser:
         raise TypeError("Error: --enable-auto-tool-choice requires --tool-call-parser")
-    if args.enable_log_outputs and not args.enable_log_requests:#如果你想记录模型的输出内容（--enable-log-outputs），就必须先开启请求日志（--enable-log-requests）。
+    if args.enable_log_outputs and not args.enable_log_requests:
         raise TypeError("Error: --enable-log-outputs requires --enable-log-requests")
 
 

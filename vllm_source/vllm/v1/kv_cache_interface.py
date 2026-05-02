@@ -16,7 +16,7 @@ from vllm.utils.torch_utils import get_dtype_size
 logger = init_logger(__name__)
 
 
-@dataclass(frozen=True) #frozen=True 的意思是：block_size 等字段是 只读的。
+@dataclass(frozen=True)
 class KVCacheSpec:
     """
     A base class for specifying the KV cache format of one layer.
@@ -28,7 +28,7 @@ class KVCacheSpec:
     @property
     def page_size_bytes(self) -> int:
         """
-        The size of a page with `block_size` tokens in bytes.  一个block （也叫page）占多少字节内存
+        The size of a page with `block_size` tokens in bytes.
 
         Returns:
             The page size

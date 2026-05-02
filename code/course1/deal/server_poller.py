@@ -13,8 +13,8 @@ def client(client_id):
     socket = context.socket(zmq.DEALER)
 
     # 为每个客户端设置唯一身份标识（ZeroMQ 会自动使用此身份进行路由）
-    identity = f"Client-{client_id}".encode("utf-8")
-    socket.setsockopt(zmq.IDENTITY, identity)
+    identity = f"Client-{client_id}".encode("utf-8") #生成一个字符串，唯一标识这个客户端
+    socket.setsockopt(zmq.IDENTITY, identity) #设置 DEALER socket 的 身份（identity）
 
     socket.connect("tcp://localhost:6666")
     print(f"[Client {client_id}] 启动，连接到引擎...")
@@ -48,8 +48,8 @@ def client(client_id):
 # 推理引擎（Engine） - 使用 ROUTER + Poller
 # -----------------------------
 def engine():
-    context = zmq.Context.instance()
-    frontend = context.socket(zmq.ROUTER)  # 接收客户端请求
+    context = zmq.Context.instance() #返回全局唯一的Context实例
+    frontend = context.socket(zmq.ROUTER)  #zmq.ROUTER是服务端套接字 # 接收客户端请求
     frontend.bind("tcp://*:6666")
 
     print("推理引擎启动，监听端口 6666...")
@@ -64,21 +64,21 @@ def engine():
         }
 
     # 创建 Poller 并注册 frontend 套接字
-    poller = zmq.Poller()
-    poller.register(frontend, zmq.POLLIN)  # 监听是否有消息可读
+    poller = zmq.Poller() #事件驱动 I/O 多路复用工具  允许单线程同时监听多个 socket
+    poller.register(frontend, zmq.POLLIN)  # 监听是否有消息可读 #只关心可读事件（POLLIN），即有客户端消息到达
 
     try:
         while True:
-            # 阻塞最多 1 秒，检查是否有事件就绪
-            # 返回格式: {socket: event_mask}
+            # 阻塞最多 1 秒，检查是否有事件就绪 #如果一秒内没有时间，就返回空列表
+            # 返回格式: {socket: event_mask}  
             socks = dict(poller.poll(timeout=1000))  # 超时单位：毫秒
 
             # 检查 frontend 是否有来自客户端的消息
             if frontend in socks and socks[frontend] == zmq.POLLIN:
-                multipart = frontend.recv_multipart()
+                multipart = frontend.recv_multipart() #一次接收整个消息列表（多段式）
                 identity = multipart[0]
                 message = multipart[-1]
-                request = zmq.utils.jsonapi.loads(message)
+                request = zmq.utils.jsonapi.loads(message)#把收到的消息从 JSON 格式的字节流转换成 Python 对象
 
                 print(f"引擎收到来自 {identity.decode()} 的请求: {request['msg_id']}")
 

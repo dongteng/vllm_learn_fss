@@ -9,7 +9,6 @@ MASK_64_BITS = (1 << 64) - 1
 
 
 def random_uuid() -> str:
-    #生成uuid 转成整数 只保留低64位 转成16位十六进制字符串
     return f"{uuid.uuid4().int & MASK_64_BITS:016x}"  # 16 hex chars
 
 

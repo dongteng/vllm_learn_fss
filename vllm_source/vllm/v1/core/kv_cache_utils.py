@@ -91,9 +91,14 @@ _CBOR_HASH_FUNCTIONS = frozenset({sha256_cbor, xxhash_cbor})
 
 
 def init_none_hash(hash_fn: Callable[[Any], bytes]):
-    global NONE_HASH
+    """
+    初始化全局的NONE_HASH , 用于表示空hash或未设置hash的情况
+    该函数会在模块加载或kvcache初始化被调用
+    """
+    
+    global NONE_HASH                                                      #声明NONE_HASH为全局变量，以便在函数内部修改它的值
 
-    hash_seed = os.getenv("PYTHONHASHSEED")
+    hash_seed = os.getenv("PYTHONHASHSEED")                               #获取python解释器的hash随机种子环境变量
     if hash_seed is None and hash_fn in _CBOR_HASH_FUNCTIONS:
         logger.warning(
             "PYTHONHASHSEED is not set. This will lead to non-reproducible "
@@ -103,49 +108,61 @@ def init_none_hash(hash_fn: Callable[[Any], bytes]):
         )
 
     if hash_seed is None:
-        NONE_HASH = BlockHash(os.urandom(32))
+        NONE_HASH = BlockHash(os.urandom(32))                               #未设置 PYTHONHASHSEED 时，使用 32 字节的随机值作为 NONE_HASH
     else:
-        NONE_HASH = BlockHash(hash_fn(hash_seed))
+        NONE_HASH = BlockHash(hash_fn(hash_seed))                           ## 已设置 PYTHONHASHSEED 时，使用传入的 hash_fn 对 seed 进行哈希
 
 
 @dataclass
 class KVCacheBlock:
     """KV-cache block metadata."""
 
-    # Block ID, ranging from 0 to num_gpu_blocks - 1.
+    # Block ID, ranging from 0 to num_gpu_blocks - 1.             每个 KVCacheBlock 在 GPU 上都有一个唯一的 block_id。
     block_id: int
-    # Reference count.
-    ref_cnt: int = 0
+    # Reference count.                                            引用计数 表示当前有多少个地方正在使用这个block
+    ref_cnt: int = 0                                              
     # The hash key (block hash + group id) of the block, only available
-    # when the block is full and cached.   #意思是 只有在block已经填满并被缓存时 才存在。
+    # when the block is full and cached.                          #意思是 只有在block已经填满并被缓存时 才存在。
     _block_hash: BlockHashWithGroupId | None = None
 
-    # Used to construct a doubly linked list for free blocks. #用于构建一个空闲block的双向链表
+    # Used to construct a doubly linked list for free blocks.     #用于构建一个空闲block的双向链表
     # These two attributes should only be manipulated by FreeKVCacheBlockQueue. #这两个属性只应该由FreeKVCacheBlockQueue来操作
-    prev_free_block: "KVCacheBlock | None" = None  #为啥要有这两个字段是因为如果不使用，复杂度会很高
+    prev_free_block: "KVCacheBlock | None" = None                  #为啥要有这两个字段是因为如果不使用，复杂度会很高
     next_free_block: "KVCacheBlock | None" = None
 
-    # Whether the block is a null block that should never be cached.
+    # Whether the block is a null block that should never be cached.是否为“空块”（null block），这类 block 永远不应该被缓存。
     is_null: bool = False
 
     @property
     def block_hash(self) -> BlockHashWithGroupId | None:
+        """
+        对外暴露的只读属性，返回当前block的hash
+        """
         return self._block_hash
 
     @block_hash.setter
     def block_hash(self, block_hash: BlockHashWithGroupId):
+        """
+        设置 block 的 hash 值。增加断言保护：一个 block 只能被设置一次 hash，不允许重复设置。
+        """
         assert self.block_hash is None, (
             "The block already has a hash. This should not happen."
         )
         self._block_hash = block_hash
 
     def reset_hash(self):
-        """Reset the block hash when the block is evicted."""
+        """Reset the block hash when the block is evicted.
+        当 block 被驱逐（evicted）时，重置其 hash 值。
+        这样该 block 就不再与之前的 key 关联，可以被重新用于其他序列。"""
         self._block_hash = None
 
     def __repr__(self) -> str:
         # Use block_id instead of KVCacheBlock object to avoid calling __repr__
         # on KVCacheBlock object recursively.
+        """
+        
+        """
+        
         prev_block_id = self.prev_free_block.block_id if self.prev_free_block else None
         next_block_id = self.next_free_block.block_id if self.next_free_block else None
         return (

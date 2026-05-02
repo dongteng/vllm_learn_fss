@@ -1129,7 +1129,6 @@ def get_pcp_group() -> GroupCoordinator:
 
 @contextmanager
 def graph_capture(device: torch.device):
-    #给cuda graph capture单独开一条专用通道，只录你想录的GPU操作
     """
     `graph_capture` is a context manager which should surround the code that
     is capturing the CUDA graph. Its main purpose is to ensure that some
@@ -1142,17 +1141,9 @@ def graph_capture(device: torch.device):
     the graph capture is running on a separate stream from the default stream,
     in order to explicitly distinguish the kernels to capture
     from other kernels possibly launched on background in the default stream.
-
-    是一个上下文管理器，用来包裹进行cuda graph捕获的代码。它主要目的是：确保某些操作会在 graph 捕获完成之后、graph 被 replay（执行）之前运行。
-    它会返回一个GraphCaptureContext对象，这个对象包含了进行graph 捕获所需要的 数据
-    目前这个对象只包含了一个信息：用于graph捕获的cuda stream.
-    这个 stream 在进入 context 时被设置为当前 CUDA stream，在退出 context 时会恢复为默认 stream。
-    这样做是为了确保graph捕获运行在一个独立的stream上，而不是默认stream
-
-    这样可以明确区分：哪些kernel需要被capture 哪些是后台在默认stream上执行，不应该被capture的
     """
     context = GraphCaptureContext(torch.cuda.Stream(device=device))
-    with get_tp_group().graph_capture(context), get_pp_group().graph_capture(context): #通知tp pp都用这条stream
+    with get_tp_group().graph_capture(context), get_pp_group().graph_capture(context):
         yield context
 
 
