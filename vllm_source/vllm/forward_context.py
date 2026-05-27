@@ -27,8 +27,8 @@ batchsize_forward_time: defaultdict = defaultdict(list)
 
 class BatchDescriptor(NamedTuple):
     """
-    Batch descriptor for cudagraph dispatching. We should keep the num of
-    items as minimal as possible to properly and uniquely describe the padded
+    Batch descriptor for cudagraph dispatching. We should keep the num of                       这是给cudagraph调度用的描述符,要求信息尽量少(避免组合爆炸),但又能唯一标识一个batch
+    items as minimal as possible to properly and uniquely describe the padded                   因为cudagraph要求shape完全一致才能复用
     batch for cudagraph.
     """
 
@@ -49,7 +49,7 @@ class BatchDescriptor(NamedTuple):
 
     def relax_for_mixed_batch_cudagraphs(self) -> "BatchDescriptor":
         """
-        Return a relaxed version of current batch descriptor that is still compatible
+        Return a relaxed version of current batch descriptor that is still compatible            返回当前batch描述符的一个放宽版本,该版本仍然可以兼容PIECEWISE cudagraph(或混合prefill-decode的FA cudagraph)
         with PIECEWISE cudagraphs (or mixed prefill-decode FA cudagraphs).
         """
         return BatchDescriptor(
@@ -183,21 +183,21 @@ class DPMetadata:
 
 
 @dataclass
-class ForwardContext:
-    # copy from vllm_config.compilation_config.static_forward_context
-    no_compile_layers: dict[str, Any]
-    attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]]
+class ForwardContext:                                                                               #定义forward(一次模型前向计算)的上下文
+    # copy from vllm_config.compilation_config.static_forward_context                               可以理解为是一个结构体专门装数据
+    no_compile_layers: dict[str, Any]                                                               #哪些层不参与编译优化(比如cudagraph / torchcompile)
+    attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]]                #attention的元数据 核心字段值一
     """
-    Type Dict[str, AttentionMetadata] for v1, map from layer_name of each 
+    Type Dict[str, AttentionMetadata] for v1, map from layer_name of each                            v1每一层attention都有对应metadata,比如kv cache位置, seq_len, block table
     attention layer to its attention metadata
-    Type List[Dict[str, AttentionMetadata]] for DBO. List of size two, one
+    Type List[Dict[str, AttentionMetadata]] for DBO. List of size two, one                           DBO一个forward拆成多个microbatch,每个microbatch有独立attn metadata
     for each microbatch.
     Set dynamically for each forward pass
     """
-    # TODO: remove after making all virtual_engines share the same kv cache
-    virtual_engine: int  # set dynamically for each forward pass
+    # TODO: remove after making all virtual_engines share the same kv cache                          未来计划删除这个字段
+    virtual_engine: int  # set dynamically for each forward pass                                     #当前使用的虚拟引擎编号 用于多engine并行推理,不同engine可能不同kv cache
     # set dynamically for each forward pass
-    dp_metadata: DPMetadata | None = None
+    dp_metadata: DPMetadata | None = None                                                            #数据并行相关信息:rank信息 shard信息  同步策略
     # determine the cudagraph style at runtime to be FULL, PIECEWISE, or NONE.
     # by default NONE, no cudagraph is used.
     cudagraph_runtime_mode: CUDAGraphMode = CUDAGraphMode.NONE

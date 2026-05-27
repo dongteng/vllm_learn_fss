@@ -97,7 +97,7 @@ class StructuredOutputGrammar(ABC):
 
 @dataclass
 class StructuredOutputBackend(ABC):
-    """Engine-level backend for structured output requests."""
+    """Engine-level backend for structured output requests."""                                              #用于结构化输出请求的引擎级后端
 
     vllm_config: VllmConfig
     tokenizer: TokenizerLike
@@ -108,24 +108,24 @@ class StructuredOutputBackend(ABC):
         self, request_type: StructuredOutputOptions, grammar_spec: str
     ) -> StructuredOutputGrammar:
         """
-        Compiles a grammar specification into a structured output grammar.
+        Compiles a grammar specification into a structured output grammar.                                   #将语法规范(grammar specification)编译为结构化输出语法
 
         Args:
-            request_type (StructuredOutputOptions): The type of structured
+            request_type (StructuredOutputOptions): The type of structured                                   结构化输出请求的类型
                 output request.
-            grammar_spec (str): The grammar specification to compile.
+            grammar_spec (str): The grammar specification to compile.                                        需要编译的语法规范
 
         Returns:
-            StructuredOutputGrammar: The compiled structured output grammar.
+            StructuredOutputGrammar: The compiled structured output grammar.                                 编译后的结构化输出语法
         """
 
     @abstractmethod
     def allocate_token_bitmask(self, max_num_seqs: int) -> "torch.Tensor":
         """
-        Allocates a token bitmask for the specified maximum number of sequences.
+        Allocates a token bitmask for the specified maximum number of sequences.                            为指定的最大序列数量分配token位掩码(bitmask)
 
         Args:
-            max_num_seqs (int): The maximum number of sequences for which
+            max_num_seqs (int): The maximum number of sequences for which                                   需要分配掩码的最大序列数量
                 to allocate the bitmask.
         """
 

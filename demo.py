@@ -6,6 +6,11 @@
 """
 
 # python - << 'EOF'
-import vllm
-print(vllm.__file__)
-# EOF
+class A():
+    def b(self):
+        print(1)
+class B(A):
+    def c(self):
+        print(2)
+if __name__ == "__main__":
+    print(B.__bases__)

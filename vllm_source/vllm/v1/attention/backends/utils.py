@@ -43,7 +43,7 @@ from vllm.v1.kv_cache_interface import AttentionSpec
 from vllm.v1.worker.ubatch_utils import UBatchSlice
 
 logger = init_logger(__name__)
-KVCacheLayoutType = Literal["NHD", "HND"]
+KVCacheLayoutType = Literal["NHD", "HND"]                                                          #本质事head维和sequence/token维谁放在前面
 _KV_CACHE_LAYOUT_OVERRIDE: KVCacheLayoutType | None = None
 
 PAD_SLOT_ID = -1
@@ -56,18 +56,18 @@ def is_valid_kv_cache_layout(value: str) -> bool:
 @dataclass
 class CommonAttentionMetadata:
     """
-    Per-batch attention metadata, shared across layers and backends.
-    AttentionMetadataBuilder instances use it to construct per-layer metadata.
+    Per-batch attention metadata, shared across layers and backends.                                每个batch的注意力元数据,在各层和后端之间共享
+    AttentionMetadataBuilder instances use it to construct per-layer metadata.                      AttentionMetadataBuilder实例使用它来构建每层的元数据
 
-    For many of the tensors we keep both GPU and CPU versions.
+    For many of the tensors we keep both GPU and CPU versions.                                      对于许多张量,我们同时保留GPU和CPU版本
     """
 
     query_start_loc: torch.Tensor
-    query_start_loc_cpu: torch.Tensor
-    """(batch_size + 1,), the start location of each request in query Tensor"""
+    query_start_loc_cpu: torch.Tensor                                                               #eg 假设3个请求的长度分别是2,3,1  则query_start_loc_cpu = [0, 2, 5, 6]
+    """(batch_size + 1,), the start location of each request in query Tensor"""                     #(batch+1,)每个请求在query tensor中的起始位置,用于定位每个请求的slice。+1是因为需要一个结束位置
 
     seq_lens: torch.Tensor
-    """(batch_size,), the number of computed tokens for each request"""
+    """(batch_size,), the number of computed tokens for each request"""                             #每个请求已经计算的token数量,用于记录当前decode进度
 
     num_reqs: int
     """Number of requests"""
@@ -79,20 +79,20 @@ class CommonAttentionMetadata:
     max_seq_len: int
     """Longest context length (may be an upper bound)"""
 
-    block_table_tensor: torch.Tensor
-    slot_mapping: torch.Tensor
+    block_table_tensor: torch.Tensor                                                                #用于记录每个request的token对应到哪些cache block
+    slot_mapping: torch.Tensor                                                                      #token到kv cache slot的映射关系, attention/kernel会根据它找到token在cache中的实际存储位置
 
-    causal: bool = True
+    causal: bool = True                                                                             #是否使用因果注意力, True表示只能看到当前token之前的内容,符合自回归生成
 
     # Needed by FastPrefillAttentionBuilder
-    logits_indices_padded: torch.Tensor | None = None
-    num_logits_indices: int | None = None
+    logits_indices_padded: torch.Tensor | None = None                                               #需要计算logits的token索引(padding版本)
+    num_logits_indices: int | None = None                                                           #实际logits索引数量
 
     # Needed by CrossAttentionBuilder
-    encoder_seq_lens: torch.Tensor | None = None
+    encoder_seq_lens: torch.Tensor | None = None                                                    #encoder侧每个request的序列长度
     encoder_seq_lens_cpu: np.ndarray | None = None
 
-    dcp_local_seq_lens: torch.Tensor | None = None
+    dcp_local_seq_lens: torch.Tensor | None = None                                                  #dcp中当前rank的本地序列长度 即当前并行rank实际负责处理的sequence长度
     dcp_local_seq_lens_cpu: torch.Tensor | None = None
     """Sequence lengths of the local rank in decode context parallelism world"""
 
@@ -130,10 +130,16 @@ class CommonAttentionMetadata:
             self._num_computed_tokens_cpu = self.seq_lens_cpu - query_seq_lens
         return self._num_computed_tokens_cpu
 
-    # TODO(lucas): remove once we have FULL-CG spec-decode support
+    # TODO(lucas): remove once we have FULL-CG spec-decode support                                    #一旦我们完全支持full-cg spec-decode  这个方法可以删除
     def unpadded(
         self, num_actual_tokens: int, num_actual_reqs: int
     ) -> "CommonAttentionMetadata":
+        """
+        返回一个去掉padding后的CommonAttentionMetadata副本,用于只保留实际token和实际request的信息
+        而不是包含padding的大tensor
+        
+        """
+        
         maybe_slice_reqs = lambda x: x[:num_actual_reqs] if x is not None else None
         return CommonAttentionMetadata(
             query_start_loc=self.query_start_loc[: num_actual_reqs + 1],
@@ -166,11 +172,17 @@ def slice_query_start_locs(
     request_slice: slice,
 ) -> torch.Tensor:
     """
-    Creates a new query_start_loc that corresponds to the requests in
+    Creates a new query_start_loc that corresponds to the requests in                                   创建一个新的query_start_loc 它值对应request_slice指定范围的请求
     request_slice.
 
-    Note: This function creates a new tensor to hold the new query_start_locs.
-    This will break cudagraph compatibility.
+    Note: This function creates a new tensor to hold the new query_start_locs.                          这个函数会创建一个新的tensor来保存新的query_start_loc
+    This will break cudagraph compatibility.                                                            因此会破坏cudagraph兼容性(因为cudagraph要求tensor地址固定)
+    
+    eg.
+    原始query_start_loc=[0,2,5,9,12]  表示req0:[0:2]   req1:[2:5] req2:[5:9] req3:[9:12]
+    现在request_slice= slice(1,3)   意思是取req1 req2,  则先切出来[2,5,9] 在减去起始位置2
+    就得到最新的query_start_loc = [0,3,7]
+    
     """
     return (
         query_start_loc[request_slice.start : request_slice.stop + 1]
@@ -182,8 +194,9 @@ def _make_metadata_with_slice(
     ubatch_slice: UBatchSlice, attn_metadata: CommonAttentionMetadata
 ) -> CommonAttentionMetadata:
     """
-    This function creates a new CommonAttentionMetadata that corresponds to
-    the requests included in ubatch_slice
+    This function creates a new CommonAttentionMetadata that corresponds to                             根据ubatch_slice从原始attn_metadata中切除一个新的CommnAttentionMetadata
+    the requests included in ubatch_slice                                                               这函数主要用于 将一个大batch切成多个ubatch(micro-batch时)为每个ubatch构建对应的attention metadata
+    
     """
 
     assert not ubatch_slice.is_empty(), f"Ubatch slice {ubatch_slice} is empty"
@@ -278,10 +291,10 @@ def split_attn_metadata(
     common_attn_metadata: CommonAttentionMetadata,
 ) -> list[CommonAttentionMetadata]:
     """
-    Creates a new CommonAttentionMetadata instance that corresponds to the
-    requests for each UBatchSlice in ubatch_slices.
+    Creates a new CommonAttentionMetadata instance that corresponds to the                          根据ubatch_slices,为每个UBatchSlice创建对应的CommonAttentionMetadata
+    requests for each UBatchSlice in ubatch_slices.                                                 也就是说把一个大batch的attention metadata切分成多个ubatch的metadata
 
-    Note: This function does not modify common_attn_metadata
+    Note: This function does not modify common_attn_metadata                                        注意这个函数不会修改原始common_attn_metadata 而是创建新的metadata副本
     """
     results = []
     for ubatch_slice in ubatch_slices:
@@ -294,31 +307,31 @@ M = TypeVar("M")
 
 
 class AttentionCGSupport(enum.Enum):
-    """Constants for the cudagraph support of the attention backend
+    """Constants for the cudagraph support of the attention backend                                 注意力后端对cuda graph支持级别的常量定义
     Here we do not consider the cascade attention, as currently
     it is never cudagraph supported."""
 
     ALWAYS = 3
-    """Cudagraph always supported; supports mixed-prefill-decode"""
+    """Cudagraph always supported; supports mixed-prefill-decode"""                                 #始终支持;支持混合预填充和解码
     UNIFORM_BATCH = 2
-    """Cudagraph supported for batches the only contain query lengths that are
+    """Cudagraph supported for batches the only contain query lengths that are                      仅在批次中所有query长度相同的情况下支持cudagraph
     the same, this can be used for spec-decode
         i.e. "decodes" are 1 + num_speculative_tokens"""
     UNIFORM_SINGLE_TOKEN_DECODE = 1
-    """Cudagraph supported for batches the only contain query_len==1 decodes"""
+    """Cudagraph supported for batches the only contain query_len==1 decodes"""                     #仅在批次中所有解码长度为1时支持cudagraph
     NEVER = 0
     """NO cudagraph support"""
 
 
 class AttentionMetadataBuilder(abc.ABC, Generic[M]):
-    # Does this backend/builder support CUDA Graphs for attention (default: no).
-    # Do not access directly. Call get_cudagraph_support() instead.
+    # Does this backend/builder support CUDA Graphs for attention (default: no).                    当前attention backend/builder 是否支持CUDA graph  ,默认不支持
+    # Do not access directly. Call get_cudagraph_support() instead.                                 注意不要直接访问这个成员变量
     _cudagraph_support: ClassVar[AttentionCGSupport] = AttentionCGSupport.NEVER
-    # Does this backend/builder reorder the batch?
-    # If not, set this to None. Otherwise set it to the query
+    # Does this backend/builder reorder the batch?                                                  当前backend/builder是否会对batch重新排序(reorder)
+    # If not, set this to None. Otherwise set it to the query                                       如果不会,则将其设置为None  否则将其设置为 会被移动到batch最前面的query长度
     # length that will be pulled into the front of the batch.
     reorder_batch_threshold: int | None = None
-    # Does this backend/builder support updating the block table in existing
+    # Does this backend/builder support updating the block table in existing                        当前backend/builder是否支持:在已有metadata上更新block table
     # metadata
     supports_update_block_table: bool = False
 
@@ -337,23 +350,24 @@ class AttentionMetadataBuilder(abc.ABC, Generic[M]):
 
     @classmethod
     def get_cudagraph_support(
-        cls: type["AttentionMetadataBuilder"],
+        cls: type["AttentionMetadataBuilder"],                                                      
         vllm_config: VllmConfig,
         kv_cache_spec: AttentionSpec,
     ) -> AttentionCGSupport:
-        """Get the cudagraph support level of this builder class."""
+        """Get the cudagraph support level of this builder class.                                   获取当前构建器类对CUDA Graph的支持级别
+        """
         return cls._cudagraph_support
 
     def _init_reorder_batch_threshold(
         self,
-        reorder_batch_threshold: int | None = 1,
+        reorder_batch_threshold: int | None = 1,                                                    #可以理解成什么时候允许backend对batch做重排序的长度阈值
         supports_spec_as_decode: bool = False,
         supports_dcp_with_varlen: bool = False,
     ) -> None:
         self.reorder_batch_threshold = reorder_batch_threshold
         if self.reorder_batch_threshold is not None and supports_spec_as_decode:
-            # If the backend supports spec-as-decode kernels, then we can set
-            # the reorder_batch_threshold based on the number of speculative
+            # If the backend supports spec-as-decode kernels, then we can set                       如果后端支持speculative token当作decode的kernel
+            # the reorder_batch_threshold based on the number of speculative                        那么我们可以根据配置中的spec token数量 来设置reorder_batch_threshold
             # tokens from the config.
             speculative_config = self.vllm_config.speculative_config
             if (
@@ -379,15 +393,15 @@ class AttentionMetadataBuilder(abc.ABC, Generic[M]):
         fast_build: bool = False,
     ) -> M:
         """
-        Central method that builds attention metadata.
-        Some builders (MLA) require reorder_batch to be called prior to build.
+        Central method that builds attention metadata.                                              构建attention metadata的核心方法
+        Some builders (MLA) require reorder_batch to be called prior to build.                      某些builder(如MLA)要求在调用build之前 先执行reorder_batch
 
         Args:
-            common_prefix_len: The length of the common prefix of the batch.
-            common_attn_metadata: The common attention metadata.
-            fast_build: The meta-data will prioritize speed of building over
-                then speed at execution. Can be used for spec-decode where the
-                result of a build call may only be used for few layers/iters.
+            common_prefix_len: The length of the common prefix of the batch.                        batch中公共前缀(common prefix)的长度
+            common_attn_metadata: The common attention metadata.                                    通用attention元数据
+            fast_build: The meta-data will prioritize speed of building over                        是否优先提高metadata的构建速度,而不是执行阶段的运行速度
+                then speed at execution. Can be used for spec-decode where the                      这个选项可以用于spec decode
+                result of a build call may only be used for few layers/iters.                       因为build的结果可能只会被少量layer或iteration使用
         """
         raise NotImplementedError
 
@@ -398,11 +412,11 @@ class AttentionMetadataBuilder(abc.ABC, Generic[M]):
         slot_mapping: torch.Tensor,
     ) -> M:
         """
-        Update the block table for the attention metadata.
-        Faster when theres multiple kv-cache groups that create virtually the
-        same metadata but just with different block tables.
+        Update the block table for the attention metadata.                                          更新attention metadata中的block table
+        Faster when theres multiple kv-cache groups that create virtually the                       当存在多个kv-cache group时 如果它们生成的metadata基本相同
+        same metadata but just with different block tables.                                         只是block table不同,那么直接更新block table会更高效
 
-        Only needs to be implemented if supports_update_block_table is True.
+        Only needs to be implemented if supports_update_block_table is True.                        只有supports_updata_block_table为True时 才需要实现则会个方法
         """
         raise NotImplementedError
 
@@ -410,9 +424,9 @@ class AttentionMetadataBuilder(abc.ABC, Generic[M]):
         self, common_attn_metadata: CommonAttentionMetadata
     ) -> M:
         """
-        Build attention metadata for CUDA graph capture. Uses build by default.
-        Subclasses that override this method should call self.build or
-        super().build_for_cudagraph_capture.
+        Build attention metadata for CUDA graph capture. Uses build by default.                     为CUDA GRAPH  catputre构建attention metadata
+        Subclasses that override this method should call self.build or                              默认实现直接使用build方法 
+        super().build_for_cudagraph_capture.                                                        如果子类需要重写该方法,应显式调用self.build或super().build_for_cudagraph_capture
         """
         return self.build(
             common_prefix_len=0, common_attn_metadata=common_attn_metadata
@@ -457,6 +471,9 @@ class AttentionMetadataBuilder(abc.ABC, Generic[M]):
 
 @functools.lru_cache
 def get_kv_cache_layout():
+    """
+    确定当前系统最终使用哪一种kv cache layout
+    """
     # Format specified by the code.
     global _KV_CACHE_LAYOUT_OVERRIDE
 
@@ -492,16 +509,16 @@ def set_kv_cache_layout(cache_layout: KVCacheLayoutType):
 @dataclass
 class PerLayerParameters:
     """
-    Currently, FlashInfer backend only support models in which all layers share
-    the same values for the following hyperparameters. Should not be used for
+    Currently, FlashInfer backend only support models in which all layers share                         当前FlashInfer后端仅支持所有层layer共享相同超参数的模型
+    the same values for the following hyperparameters. Should not be used for                           注意:不适用于trtllm-gen后端,因为trtllm-gen支持不同层使用不同的超参数值
     trtllm-gen backend since it supports different values for the following
     hyperparameters.
     """
 
-    window_left: int
-    logits_soft_cap: float | None
-    sm_scale: float
-    has_sinks: bool = False
+    window_left: int                                                                                    #窗口注意力 向左扩展的token数量
+    logits_soft_cap: float | None                                                                       #logits soft cap值,用于限制logits的数值范围 防止数值爆炸
+    sm_scale: float                                                                                     #attention中softmax的缩放因子, 通常为1/sqrt(head_dim)
+    has_sinks: bool = False                                                                             #是否使用sink attention(沉底注意力) 用于保持初始token的能力
     # has same params for all layers
     has_same_window_lefts: bool | None = field(default=None, compare=False)
     has_same_all_params: bool | None = field(default=None, compare=False)
@@ -511,16 +528,16 @@ def get_per_layer_parameters(
     vllm_config: VllmConfig, layer_names: list[str], cls_: type["AttentionImpl"]
 ) -> dict[str, PerLayerParameters]:
     """
-    Scan layers in `layer_names` and determine some hyperparameters
-    to use during `plan`.
+    Scan layers in `layer_names` and determine some hyperparameters                                     从指定的layer_names中扫描所有attention层,提取每个层需要的超参数,用于后续的attention planning阶段
+    to use during `plan`.                                                                               为什么需要这个函数? FlashInfer后端限制,它目前要求模型所有层使用相同的注意力参数
     """
 
     layers = get_layers_from_vllm_config(vllm_config, AttentionLayerBase, layer_names)
     per_layer_params: dict[str, PerLayerParameters] = {}
 
-    for key, layer in layers.items():
-        impl = layer.impl
-        assert isinstance(impl, cls_)
+    for key, layer in layers.items():                                                                   #例如 key = "model.layers.0", "model.layers.1" ...
+        impl = layer.impl                                                                               #拿到真正的Attention实现对象
+        assert isinstance(impl, cls_)                                                                   #确保是指定类型的Attention
 
         # Infer hyperparameters from the attention layer
         window_size = getattr(impl, "sliding_window", None)
@@ -540,23 +557,23 @@ def infer_global_hyperparameters(
     per_layer_params: dict[str, PerLayerParameters],
 ) -> PerLayerParameters:
     """
-    Currently, FlashInfer backend other than trtllm-gen
+    Currently, FlashInfer backend other than trtllm-gen                                                 除了trtllm-gen之外的FlashInfer后端仅支持所有层共享相同超参数的模型
     only support models in which all layers share
-    the same values for the following hyperparameters:
+    the same values for the following hyperparameters:                                                  这些超参数包括
     - `window_left`
     - `logits_soft_cap`
     - `sm_scale`
 
-    So this function asserts that all layers share the same values for these
+    So this function asserts that all layers share the same values for these                            因此,此函数会断言(assert)所有层再上述超参数上取值相同,并返回全局统一的参数值
     hyperparameters and returns the global values.
     """
 
-    assert len(per_layer_params) > 0, "No attention layers found in the model."
+    assert len(per_layer_params) > 0, "No attention layers found in the model."                         #确保模型中至少包含一个Attention层
 
-    param_sets = list(per_layer_params.values())
+    param_sets = list(per_layer_params.values())                                                        #所有层的参数对象转为列表
     global_params = param_sets[0]
 
-    global_params.has_same_window_lefts = all(
+    global_params.has_same_window_lefts = all(                                                          #检查所有层是否参数一致
         params.window_left == global_params.window_left for params in param_sets
     )
     global_params.has_same_all_params = all(
@@ -567,36 +584,36 @@ def infer_global_hyperparameters(
 
 
 #
-# Take in `query_start_loc_np` and `seq_lens_np` and break the sequences into
-# local attention blocks, where each block is passed to the attention kernel
+# Take in `query_start_loc_np` and `seq_lens_np` and break the sequences into                           #输入query_start_loc_np和seq_lens_np 将序列拆分成多个局部注意力块(local attention block)
+# local attention blocks, where each block is passed to the attention kernel                            每个块作为独立的本地(虚拟)批处理传递给注意力内核
 # as an independent local ("virtual") batch item.
 #
-# For example, if are performing a chunked prefill a batch of 3 sequences:
-#   q_seqlens  = [4, 10, 5]
-#   kv_seqlens = [6, 17, 9]
-# Then normally for regular attention we would compute with an attention mask
-#  for batch idx 0 (q_seqlens = 4, kv_seqlens = 6) like:
+# For example, if are performing a chunked prefill a batch of 3 sequences:                             例如,当我们对一个包含3个序列的batch进行chunked prefill(分块预填充)时,
+#   q_seqlens  = [4, 10, 5]                                                                            q_seqlens=[4,10,5] 
+#   kv_seqlens = [6, 17, 9]                                                                            kv_seqlens=[6,17,9]
+# Then normally for regular attention we would compute with an attention mask                          在常规(regular)Attention中, 对于batch中第0个序列
+#  for batch idx 0 (q_seqlens = 4, kv_seqlens = 6) like:                                               (q_seqlens=4, kv_seqlens=6) 其注意力掩码(attention mask)通常如下所示
 #   batch idx: 0 (q_seqlens = 4, kv_seqlens = 6)
-#        k_toks >   0 1 2 3 4 5
+#        k_toks >   0 1 2 3 4 5                                                                        star难道不是下三角吗?为啥对角线右上方还有?
 #        q_toks v  _____________
 #               0 | 1 1 1
 #               1 | 1 1 1 1
 #               2 | 1 1 1 1 1
 #               3 | 1 1 1 1 1 1
 #
-# for local attention (with attn_chunk_size = 4) we would compute with an
-#  attention mask like:
-#   batch idx: 0  (q_seqlens = 4, kv_seqlens = 6, attn_chunk_size = 4)
-#        k_toks >   0 1 2 3 4 5
+# for local attention (with attn_chunk_size = 4) we would compute with an                              对于局部注意力(local attention),当attn_chunk_size=4时
+#  attention mask like:                                                                                我们会采用如下注意力掩码进行计算
+#   batch idx: 0  (q_seqlens = 4, kv_seqlens = 6, attn_chunk_size = 4)                                 star:attn_chunk_size=4不是指每个query固定attend4个key,真实含义是把序列拆分成多个大小为4的注意力块,每个块内部独立做attention
+#        k_toks >   0 1 2 3 4 5                                                                        这是一种分块局部注意力的实现方式,而不是经典的滑动窗口注意力
 #        q_toks v  _____________
-#               0 | 1 1 1
-#               1 | 1 1 1 1
-#               2 |         1
-#               3 |         1 1
+#               0 | 1 1 1                                                                              Q0只attend k0,k1,k2(共3个)           
+#               1 | 1 1 1 1                                                                            Q1  attend k0,k1,k2,k3 (共4个)
+#               2 |         1                                                                          Q2  attend k4(1个)
+#               3 |         1 1                                                                        Q3  attend k4,k5(2个)   此处看ppt
 #
-# We can simulate this mask using standard flash-attention by breaking the
-#  sequences into local ("virtual") batches, where each local batch item is a
-#  local attention block, so in this case batch idx 0 would be broken up into:
+# We can simulate this mask using standard flash-attention by breaking the                             可以通过把序列拆成局部(虚拟)batch来 用标准flash attention实现这个mask
+#  sequences into local ("virtual") batches, where each local batch item is a                          每个局部batch元素对应一个local attention block
+#  local attention block, so in this case batch idx 0 would be broken up into:                         所以原batch idx 0会被拆分成
 #
 #   local-batch idx: 0 (q_seqlens = 2, kv_seqlens = 4)  (batch 0)
 #        k_toks >   0 1 2 3
@@ -609,20 +626,26 @@ def infer_global_hyperparameters(
 #               2 | 1
 #               3 | 1 1
 #
-# e.g. if we have:
-#   attn_chunk_size = 4
+# e.g. if we have:                                                                                      这个例子展示的是 有一个函数会被原始batch(多个请求)按照attn_chunk_size切成很多小的(局部虚拟batch)
+#   attn_chunk_size = 4                                                                                 每个虚拟局部batch只包含同一个chunk内的query
 #   query_start_loc_np = [0, 4, 14, 19] (q_seqlens = [4, 10, 5])
 # Then this function would return:
 #                           __b0__  ______b1______  __b2__ < orig batch indices
-#   q_seqlens_local    = [   2,  2,  1,  4,  4,  1,  4,  1]
-#   cu_seqlens_q_local = [0, 4,  6, 10, 14, 18, 19, 23, 24]
-#   seqlens_k_local    = [   4,  2,  4,  4,  4,  1,  4,  1]
-#   block_table_local  : shape[local_virtual_batches, pages_per_local_batch]
+#   q_seqlens_local    = [   2,  2,  1,  4,  4,  1,  4,  1]                                             此处看ppt吧
+#   cu_seqlens_q_local = [0, 4,  6, 10, 14, 18, 19, 23, 24] 
+#   seqlens_k_local    = [   4,  2,  4,  4,  4,  1,  4,  1]                                             每个虚拟小Batch 内部，当前 Q 块到底能看到多少个 K
+#   block_table_local  : shape[local_virtual_batches, pages_per_local_batch]                
 def make_local_attention_virtual_batches(
     attn_chunk_size: int,
     common_attn_metadata: CommonAttentionMetadata,
     block_size: int = 0,
 ) -> tuple[CommonAttentionMetadata, Callable[[torch.Tensor], torch.Tensor]]:
+    """
+    将原始batch按照attn_chunk_size切分成多个小的 虚拟local batch
+    使得每个虚拟batch得kv长度都不超过attn_chunk_size.
+    从而可以使用标准FlashAttention实现chunked local attention
+    """
+    
     query_start_loc_np = common_attn_metadata.query_start_loc_cpu.numpy()
     seq_lens_np = common_attn_metadata.seq_lens_cpu.numpy()
     block_table = common_attn_metadata.block_table_tensor
@@ -631,25 +654,25 @@ def make_local_attention_virtual_batches(
     q_seqlens = query_start_loc_np[1:] - query_start_loc_np[:-1]
     actual_batch_size = seq_lens_np.shape[0]
 
-    # Handle if we are starting in the middle of a local attention block,
-    #  we assume q_seqlens > 0 (for all elements), for each batch idx we compute
-    #  the number of tokens that are not in the first local attention block and
+    # Handle if we are starting in the middle of a local attention block,                               处理从一个local attention block中间开始得情况
+    #  we assume q_seqlens > 0 (for all elements), for each batch idx we compute                        我们假设每个请求的q_seqlens都大于0  对每个原始batch idx 我们先算出不再第一个local attention block里的query token数量
+    #  the number of tokens that are not in the first local attention block and                         然后对剩余的query数量使用cdiv(向上取整除法) 就能得到总共多少个local block
     #  then we can simply use a cdiv for the rest.
     # For example if we have:
     #   attn_chunk_size = 4
     #   q_seqlens = [4, 10, 5]
     #   k_seqlens = [6, 17, 9]
     # Then we would get:
-    #   new_tokens_in_first_block = [2, 1, 4]
-    #   local_blocks = [2, 4, 2]
+    #   new_tokens_in_first_block = [2, 1, 4]                                                           每个请求第一个local block里包含的query数量
+    #   local_blocks = [2, 4, 2]                                                                        为每个请求最终拆成多少个虚拟local batch
     q_tokens_in_first_block = np.minimum(
         attn_chunk_size - ((seq_lens_np - q_seqlens) % attn_chunk_size), q_seqlens
     ).astype(np.int32)
-    tokens_in_last_block = attn_chunk_size + (seq_lens_np % -attn_chunk_size)
-    local_blocks = 1 + cdiv(q_seqlens - q_tokens_in_first_block, attn_chunk_size)
+    tokens_in_last_block = attn_chunk_size + (seq_lens_np % -attn_chunk_size)                           #计算每个请求最后一个local block的kv 长度(可能是partial)
+    local_blocks = 1 + cdiv(q_seqlens - q_tokens_in_first_block, attn_chunk_size)                       #计算每个原始请求最重要被拆成多少个local virtual batch
 
-    # Once we know the number of local blocks we can compute the request spans
-    #  for each batch idx, we can figure out the number of "virtual" requests we
+    # Once we know the number of local blocks we can compute the request spans                          现在我们已经知道每个请求要拆成几个local block
+    #  for each batch idx, we can figure out the number of "virtual" requests we                        接下来要为所有虚拟batch生成编号,方便后续构造seqlens_q_local
     #  have to make,
     # For the above example we would get:
     #   seqlens_q_local = [2, 2, 1, 4, 4, 1, 4, 1]
@@ -917,7 +940,7 @@ def split_decodes_and_prefills(
     require_uniform: bool = False,
 ) -> tuple[int, int, int, int]:
     """
-    Assuming a reordered batch, finds the boundary between prefill and decode
+    Assuming a reordered batch, finds the boundary between prefill and decode                               #把一个混合了prefill和decode阶段的batch 按照query_len进行切分,找出prefill和decode的边界
     requests.
 
     Args:
@@ -976,15 +999,15 @@ def split_prefill_chunks(
     seq_lens_cpu: torch.Tensor, workspace_size: int, request_offset: int = 0
 ) -> list[tuple[int, int]]:
     """
-    Split the prefill requests into chunks such that the total sequence length
-    of each chunk is less than or equal to the workspace size.
+    Split the prefill requests into chunks such that the total sequence length                              把多个prefill请求按照它们的sequence length进行分组,使每一组(chunk)内所有请求的token数量(total sequence length)
+    of each chunk is less than or equal to the workspace size.                                              不超过workspace_size
 
     Args:
         seq_lens_cpu: The sequence lengths of the prefill requests on CPU.
         workspace_size: The maximum workspace size (in tokens) per chunk.
         request_offset: The offset to add to the request indices.
     Returns:
-        A list of tuples of (reqs_start, reqs_end) representing chunk boundaries.
+        A list of tuples of (reqs_start, reqs_end) representing chunk boundaries.                           返回一个元组 表示把哪些请求放在同一个chunk里, 如[(0, 3), (3, 4), (4, 5)]表示0-2个请求放一个chunk, 第3个单独一个chunk
     """
     chunk_bounds = []
     i, n = 0, len(seq_lens_cpu)
@@ -1005,40 +1028,40 @@ def reorder_batch_to_split_decodes_and_prefills(
     decode_threshold: int = 1,
 ) -> bool:
     """
-    Reorders the batch to split into prefill and decode requests; places all
-    requests with <= decode_threshold tokens at the front of the batch.
-    该函数通过重新排列批次（Batch）将请求分为“预填充（Prefill）”和“解码（Decode）”两部分；将所有调度 Token 数量 < decode_threshold（解码阈值）的请求排在批次的最前面。
+    Reorders the batch to split into prefill and decode requests; places all                            该函数通过重新排列批次(Batch)将请求分为“预填充(Prefill)”和“解码(Decode)”两部分;
+    requests with <= decode_threshold tokens at the front of the batch.                                 将所有调度 Token 数量 <= decode_threshold(解码阈值)的请求排在批次的最前面。
+    
     Returns:
-        True if the batch was modified, False otherwise. #返回值： True  表示 batch 顺序发生了改变（进行了重排序）；False 表示 batch 顺序已经是理想状态，无需调整
+        True if the batch was modified, False otherwise.                                                #返回值: True  表示 batch 顺序发生了改变(进行了重排序);False 表示 batch 顺序已经是理想状态,无需调整
     """
-    # We now want to reorder the batch into decode → extend → prefill order     #我们希望将批次按照 解码 (Decode) → 扩展 (Extend) → 预填充 (Prefill) 的顺序排列
+    # We now want to reorder the batch into decode → extend → prefill order                             #我们希望将批次按照 解码 (Decode) → 扩展 (Extend) → 预填充 (Prefill) 的顺序排列
     # where:
-    #   decode: request with num_scheduled_tokens <= decode_threshold           #Decode: 调度 Token 数 $\le$ 阈值的请求（通常为 1）。
-    #   extend: non-decode request with existing context                        #Extend: 调度 Token 数大于阈值，且已有历史上下文的请求。
-    #   prefill: non-decode request with no existing context                    #Prefill: 调度 Token 数大于阈值，且没有历史上下文的请求（新请求）。
-    # NOTE for now we loosely use "decode" to mean requests where attention is  #注意：目前我们粗略地用 "Decode" 代表访存密集型（Memory-bound）请求，用 "Prefill" 代表计算密集型（Compute-bound）请求
-    #  likely memory-bound and "prefill" to mean requests where attention is    #重排目的：把性质相似的请求扎堆，让底层的注意力算子（Attention Kernel）能一次性处理一类任务，从而减少 GPU 指令切换的开销。
+    #   decode: request with num_scheduled_tokens <= decode_threshold                                   #Decode: 调度 Token 数<= 阈值的请求(通常为 1)。
+    #   extend: non-decode request with existing context                                                #Extend: 调度 Token 数大于阈值,且已有历史上下文的请求。 这个分多种情况 可能长prompt分段
+    #   prefill: non-decode request with no existing context                                            #Prefill: 调度 Token 数大于阈值,且没有历史上下文的请求(新请求)。
+    # NOTE for now we loosely use "decode" to mean requests where attention is                          注意:目前我们粗略地用 "Decode" 代表访存密集型(Memory-bound)请求,用 "Prefill" 代表计算密集型(Compute-bound)请求
+    #  likely memory-bound and "prefill" to mean requests where attention is                            #重排目的:把性质相似的请求扎堆,让底层的注意力算子(Attention Kernel)能一次性处理一类任务,从而减少 GPU 指令切换的开销。
     #  likely compute-bound,
-    # 实际例子：
-    #   当前 batch 有 5 个请求：
-    #       A: Decode（调度 1 token）
-    #       B: Prefill（新请求，调度 800 token）
-    #       C: Decode（调度 1 token）
-    #       D: Extend（已有上下文，调度 4 token）
-    #       E: Prefill（新请求，调度 1200 token）
+    # 实际例子:
+    #   当前 batch 有 5 个请求:
+    #       A: Decode(调度 1 token)
+    #       B: Prefill(新请求,调度 800 token)
+    #       C: Decode(调度 1 token)
+    #       D: Extend(已有上下文,调度 4 token)
+    #       E: Prefill(新请求,调度 1200 token)
     #
-    #   重排序前：[A, B, C, D, E]   → 混合交错，效率低
-    #   重排序后：[A, C, D, B, E]   → Decode + Extend + Prefill 分组，效率更高
+    #   重排序前:[A, B, C, D, E]   → 混合交错,效率低
+    #   重排序后:[A, C, D, B, E]   → Decode + Extend + Prefill 分组,效率更高
     num_reqs = len(input_batch.req_ids)
     
-    num_scheduled_tokens = [scheduler_output.num_scheduled_tokens[id] for id in input_batch.req_ids] #获取每个请求本次调度（scheduled）的token数量
-    num_scheduled_tokens_np = np.array(num_scheduled_tokens)                                         ## 获取每个请求已经计算过的 token 数量（用于区分 Extend 和 Prefill）
-    num_computed_tokens_np = input_batch.num_computed_tokens_cpu[:num_reqs]
+    num_scheduled_tokens = [scheduler_output.num_scheduled_tokens[id] for id in input_batch.req_ids] #获取每个请求本次调度(scheduled)的token数量
+    num_scheduled_tokens_np = np.array(num_scheduled_tokens)                                         
+    num_computed_tokens_np = input_batch.num_computed_tokens_cpu[:num_reqs]                          ## 获取每个请求已经计算过的 token 数量(用于区分 Extend 和 Prefill)
 
     # ====================== 分类三种请求类型 ======================
-    is_decode = num_scheduled_tokens_np <= decode_threshold                                          ## is_decode: 本次只调度很少 token（通常是 1），属于正在生成的 Decode 请求
-    is_extend = (~is_decode) & (num_computed_tokens_np > 0)                                          ## is_extend: 本次调度较多 token，但已经有历史上下文（继续生成）
-    is_prefill = (~is_decode) & (num_computed_tokens_np == 0)                                        # is_prefill: 本次调度较多 token，且没有任何历史上下文（全新请求）
+    is_decode = num_scheduled_tokens_np <= decode_threshold                                          ## is_decode: 本次只调度很少 token(通常是 1),属于正在生成的 Decode 请求
+    is_extend = (~is_decode) & (num_computed_tokens_np > 0)                                          ## is_extend: 本次调度较多 token,但已经有历史上下文(继续生成)
+    is_prefill = (~is_decode) & (num_computed_tokens_np == 0)                                        # is_prefill: 本次调度较多 token,且没有任何历史上下文(全新请求)
 
     # Desired order: decode → extend → prefill
     req_regions = np.zeros(is_decode.shape, dtype=np.int32)  # 0 = decode by default
@@ -1052,21 +1075,20 @@ def reorder_batch_to_split_decodes_and_prefills(
     target_regions[num_decodes : num_decodes + num_extends] = 1
     target_regions[num_decodes + num_extends :] = 2
 
-    needs_swap = req_regions != target_regions              #判断是否要重排序
+    needs_swap = req_regions != target_regions                                                      #判断是否要重排序,req_regiions:当前每个request所在的类别 target_regions:理想排序下每个位置该放的类别。shape =[num_reqs]
 
     if not needs_swap.any():
-        return False                                        #已经是理想排序 无需调整
+        return False                                                                                #已经是理想排序 无需调整
 
-    # ====================== 执行重排序 ======================
-    # 找出需要移动的请求索引，并按目标区域稳定排序
+    # ====================== 执行重排序 ======================                                       eg.current req_regions: 0 2 0 1 2   target:0 0 1 2 2  
     # Extract indices that need swapping and sort by target region
-    orig_indices = np.where(needs_swap)[0]
-    sorted_order = np.argsort(req_regions[needs_swap], kind="stable")
-    src_indices = orig_indices[sorted_order]
+    orig_indices = np.where(needs_swap)[0]                                                          #只拿True的  如need_swap=[1,2,3]
+    sorted_order = np.argsort(req_regions[needs_swap], kind="stable")                               #req_regions[needs_swap]=[2, 0, 1] 排序结果[0,1,2](原的索引时1 2 0),所以该值是[1,2,0]
+    src_indices = orig_indices[sorted_order]                                                        #[2,3,1]
 
     #构建源索引->目标索引的摄影社
     src_dest_map = {int(src): int(dst) for src, dst in zip(src_indices, orig_indices)}
-    # 执行实际的交换操作（使用循环处理可能出现的链式交换）
+    # 执行实际的交换操作(使用循环处理可能出现的链式交换)
     for src in src_dest_map:
         dst = src_dest_map[src]
         while src != dst:
@@ -1114,9 +1136,9 @@ def subclass_attention_metadata(
     fields: list[tuple[str, Any, Any]],
 ) -> Any:
     """
-    Return a new subclass of `metadata_cls` with additional fields
+    Return a new subclass of `metadata_cls` with additional fields                                      动态创建一个metadata_cls子类,为其添加额外的字段
     """
-    name: str = name_prefix + metadata_cls.__name__  # type: ignore
+    name: str = name_prefix + metadata_cls.__name__  # type: ignore                                     #构造新类的完整名称,例如FlashAttnCommonAttentionMetadata
     Wrapped = make_dataclass(name, fields, bases=(metadata_cls,))
     return Wrapped
 
@@ -1131,7 +1153,13 @@ def create_fast_prefill_custom_backend(
     prefix: str,
     underlying_attn_backend: AttentionBackend,
 ) -> type[AttentionBackend]:
-    underlying_builder = underlying_attn_backend.get_builder_cls()
+    """
+    创建一个自定义的Attention Backend 用于支持Fast prefill + kv sharing特性
+    通过继承原有backend的Builder,并在build阶段注入自定义的metadata
+    从而实现对attention计算流程的增强,而需要修改底层kernel
+    """
+    
+    underlying_builder = underlying_attn_backend.get_builder_cls()                                      #获取底层backend的Builder类(如FlashAttentionBuilder FlashInferBuilder等)
 
     class FastPrefillAttentionBuilder(underlying_builder):  # type: ignore
         def build(
@@ -1140,14 +1168,14 @@ def create_fast_prefill_custom_backend(
             common_attn_metadata: CommonAttentionMetadata,
             fast_build: bool = False,
         ) -> AttentionMetadata:
-            new_common_attn_metadata = (
+            new_common_attn_metadata = (                                                                #对common_attn_metadata做预处理(注入kv sharing相关信息)
                 make_kv_sharing_fast_prefill_common_attn_metadata(common_attn_metadata)
             )
-            metadata = super().build(
+            metadata = super().build(                                                                   #调用原始builder的build方法,生成基础的attention metadata
                 common_prefix_len, new_common_attn_metadata, fast_build
             )
 
-            class KVSharingFastPrefillAttentionMetadata(
+            class KVSharingFastPrefillAttentionMetadata(                                                #动态创建自定义metadata类
                 metadata.__class__,  #  type: ignore
                 KVSharingFastPrefillMetadata,
             ):
@@ -1173,6 +1201,13 @@ def create_fast_prefill_custom_backend(
 
 
 def compute_causal_conv1d_metadata(query_start_loc_p: torch.Tensor):
+    """
+    为causal_conv1d kernel准备元数据
+    这个函数主要用于支持变长序列（variable sequence length）的 causal convolution 计算。
+    它会把每个序列按 BLOCK_M 分块，并预先计算好每个 kernel program（线程块）应该处理
+    哪个 batch 的哪一段数据，从而让 Triton/CUDA kernel 能够高效地并行执行
+    """
+    
     # Needed for causal_conv1d
     seqlens = query_start_loc_p.diff().to("cpu")
     nums_dict = {}  # type: ignore
@@ -1226,9 +1261,9 @@ def get_dcp_local_seq_lens(
     dcp_rank: int | None = None,
     cp_kv_cache_interleave_size: int = 1,
 ) -> torch.Tensor:
-    """While using dcp, kv_cache size stored on each rank may be different,  在启用DCP时，每个DCP rank本地应该负责的序列长度（local seq lens）
-    use this function to calculate split decode seq_lens of each dcp rank.    由于kv cache在不同rank之间是切分存储的，每个rank上实际存储的kv cache大小不同，因此需要通过这个函数计算出当前rank在decode阶段应该处理的本地序列长度
-    Only consider dcp now, we can extend the case of cp based on this.        注意，目前主要支持DCP，未来可基于此扩展Context Parallel（CP）的情况
+    """While using dcp, kv_cache size stored on each rank may be different,  在启用DCP时,每个DCP rank本地应该负责的序列长度(local seq lens)
+    use this function to calculate split decode seq_lens of each dcp rank.    由于kv cache在不同rank之间是切分存储的,每个rank上实际存储的kv cache大小不同,因此需要通过这个函数计算出当前rank在decode阶段应该处理的本地序列长度
+    Only consider dcp now, we can extend the case of cp based on this.        注意,目前主要支持DCP,未来可基于此扩展Context Parallel(CP)的情况
     """
     num_requests = seq_lens.size(0)
     if dcp_rank is None:

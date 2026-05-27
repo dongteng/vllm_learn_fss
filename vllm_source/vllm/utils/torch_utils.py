@@ -272,6 +272,9 @@ def resolve_kv_cache_dtype_string(
 def kv_cache_dtype_str_to_dtype(
     kv_cache_dtype: str, model_config: ModelConfig
 ) -> torch.dtype:
+    """
+    把字符串形式的kv cache dtype 转换成pytorch真正的torch.dtype类型
+    """
     if kv_cache_dtype == "auto":
         # Model config may not be specified for unit tests, default to float16
         return model_config.dtype if model_config else torch.half

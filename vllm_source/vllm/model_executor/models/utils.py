@@ -513,10 +513,10 @@ _CPU_OFFLOAD_BYTES = 0
 _CPU_OFFLOAD_MAX_BYTES = 0
 
 
-def set_cpu_offload_max_bytes(max_bytes: int) -> None:
+def set_cpu_offload_max_bytes(max_bytes: int) -> None:                                          #设置CPU offload的最大可用字节数
     global _CPU_OFFLOAD_MAX_BYTES, _CPU_OFFLOAD_BYTES
-    _CPU_OFFLOAD_BYTES = 0
-    _CPU_OFFLOAD_MAX_BYTES = max_bytes
+    _CPU_OFFLOAD_BYTES = 0                                                                      #当前已用的offload内存容量
+    _CPU_OFFLOAD_MAX_BYTES = max_bytes                                                          #CPU offload允许使用的最大内存容量
 
 
 def maybe_offload_to_cpu(module: torch.nn.Module) -> torch.nn.Module:

@@ -42,15 +42,15 @@ class BatchUpdate:
     # Metadata for requests added to, removed from, and moved
     # within the persistent batch.
     #
-    # Key assumption: the `output_tok_ids` list (which is an element of each                #关键假设:
-    # tuple in `added`) is a reference to the request's running output tokens
-    # list; via this reference, the logits processors always see the latest
+    # Key assumption: the `output_tok_ids` list (which is an element of each                #关键假设:added中每个元素的output_tok_ids实际上是只想request内部输出token列表的引用
+    # tuple in `added`) is a reference to the request's running output tokens               这意味着logits processsors看到的始终是最新生成的token列表(因为是引用 而不是拷贝)
+    # list; via this reference, the logits processors always see the latest                 举例:request.output_token_ids = [1,2]  processors 拿到的是这个 list 的引用   后面变成 [1,2,3] processors 自动看到更新
     # list of generated output tokens.
     #
-    # NOTE:
-    # * Added or moved requests may replace existing requests with the same
+    # NOTE:                                                                                 注意事项:
+    # * Added or moved requests may replace existing requests with the same                     1.add或moved的request 可能会覆盖同一个index上的旧request
     #   index.
-    # * Operations should be processed in the following order:
+    # * Operations should be processed in the following order:                                  2.所有操作必须按一下顺序执行,这个顺序是为了避免index冲突和错位问题
     #   - removed, added, moved
     removed: Sequence[RemovedRequest]
     added: Sequence[AddedRequest]
@@ -60,7 +60,7 @@ class BatchUpdate:
 class LogitsProcessor(ABC):
     @classmethod
     def validate_params(cls, sampling_params: SamplingParams):
-        """Validate sampling params for this logits processor.
+        """Validate sampling params for this logits processor.                              校验该Processor所需的sampling参数是否合法    
 
         Raise ValueError for invalid ones.
         """
@@ -69,21 +69,21 @@ class LogitsProcessor(ABC):
     @abstractmethod
     def __init__(
         self, vllm_config: "VllmConfig", device: torch.device, is_pin_memory: bool
-    ) -> None:
+    ) -> None:                                                                              #必须实现初始化逻辑
         raise NotImplementedError
 
     @abstractmethod
     def apply(self, logits: torch.Tensor) -> torch.Tensor:
-        """Apply LogitsProcessor to batch logits tensor.
+        """Apply LogitsProcessor to batch logits tensor.                                    对batch的logits进行处理,输入:logits:shape通常是[batch_size, vocab_size]
 
-        The updated tensor must be returned but may be
+        The updated tensor must be returned but may be                                      
         modified in-place.
         """
         raise NotImplementedError
 
     @abstractmethod
     def is_argmax_invariant(self) -> bool:
-        """True if logits processor has no impact on the
+        """True if logits processor has no impact on the                                    是否影响greedy(argmax)结果
         argmax computation in greedy sampling.
         NOTE: may or may not have the same value for all
         instances of a given LogitsProcessor subclass,
@@ -96,11 +96,11 @@ class LogitsProcessor(ABC):
         self,
         batch_update: Optional["BatchUpdate"],
     ) -> None:
-        """Called when there are new output tokens, prior
-        to each forward pass.
+        """Called when there are new output tokens, prior                                   每次forward前调用,用于更新内部状态
+        to each forward pass.                                                               调用时机:每一步生成前,在apply之前
 
         Args:
-            batch_update: Non-None iff there have been changes
-                to the batch makeup.
+            batch_update: Non-None iff there have been changes                              参数:batch_update
+                to the batch makeup.                                                        用于同步batch内request的变化
         """
         raise NotImplementedError

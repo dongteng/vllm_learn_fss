@@ -102,14 +102,13 @@ class ConstantList(Generic[T], Sequence):
 
 
 class CpuGpuBuffer:
-    """Buffer to easily copy tensors between CPU and GPU.
-    vLLM中用于在CPU和GPU之间高效传输数据的辅助缓冲区（Buffer）
+    """Buffer to easily copy tensors between CPU and GPU.vLLM中用于在CPU和GPU之间高效传输数据的辅助缓冲区(Buffer)
     
-    设计思想：预先在CPU和GPU上各分配一块相同形状和类型的内存，后续只要在两者之间进行数据拷贝，而不需要反复创建tensor
-    主要作用：1.减少内存分配开销  2支持异步拷贝（non-blocking） 让GPU计算和数据传输尽量重叠 3.提供方便的.np属性，方便再CPU侧以numpy方式操作数据
+    设计思想:预先在CPU和GPU上各分配一块相同形状和类型的内存,后续只要在两者之间进行数据拷贝,而不需要反复创建tensor
+    主要作用:1.减少内存分配开销  2支持异步拷贝(non-blocking) 让GPU计算和数据传输尽量重叠 3.提供方便的.np属性,方便再CPU侧以numpy方式操作数据
     
-    典型使用场景：
-    - slot_mapping、num_computed_tokens、sampling 参数等需要在 CPU 上准备，然后快速传到 GPU
+    典型使用场景:
+    - slot_mapping、num_computed_tokens、sampling 参数等需要在 CPU 上准备,然后快速传到 GPU
     - logits、采样结果等从 GPU 传回 CPU 进行后处理
     """
 
@@ -125,21 +124,20 @@ class CpuGpuBuffer:
         初始化一个CPU-GPU配对缓冲区
         
         Args:
-            *size:tensor的形状（支持多维，例如 (max_num_reqs, max_seq_len)）
-            dtype: 数据类型（如 torch.int32, torch.float16 等）
-            device: GPU 所在的设备（通常是 cuda:0）
-            pin_memory: 是否使用锁页内存（Pinned Memory），大幅加速 CPU→GPU 传输
-            with_numpy: 是否同时创建一个 numpy 视图（方便 CPU 侧直接操作）
-                       注意：bfloat16 无法直接转 numpy，所以必须设为 False
+            *size:tensor的形状(支持多维,例如 (max_num_reqs, max_seq_len))
+            dtype: 数据类型(如 torch.int32, torch.float16 等)
+            device: GPU 所在的设备(通常是 cuda:0)
+            pin_memory: 是否使用锁页内存(Pinned Memory),大幅加速 CPU→GPU 传输
+            with_numpy: 是否同时创建一个 numpy 视图(方便 CPU 侧直接操作)
+                       注意:bfloat16 无法直接转 numpy,所以必须设为 False
         """
-        # 在 CPU 上分配内存（支持 pin_memory 加速传输），如果不是pin那么togpu的时候还会临时弄到pin里边去
-        self.cpu = torch.zeros(*size, dtype=dtype, device="cpu", pin_memory=pin_memory)
+        
+        self.cpu = torch.zeros(*size, dtype=dtype, device="cpu", pin_memory=pin_memory)                 # 在CPU上分配内存(支持 pin_memory 加速传输),如果不是pin那么togpu的时候还会临时弄到pin里边去
         self.gpu = torch.zeros_like(self.cpu, device=device)
         
-        #可选 创建一个numpy视图，方便在CPU上直接进行数组操作（例如批量赋值、切片等，比 torch.cpu 操作更灵活）
-        self.np: np.ndarray
-        # To keep type hints simple (avoiding generics and subclasses), we      只有with_numpy=True时才创建numpy视图
-        # only conditionally create the numpy array attribute. This can cause   注意numpy操作在很多场景下比torch cpu操作更快更直观
+        self.np: np.ndarray                                                                             #可选 创建一个numpy视图,方便在CPU上直接进行数组操作(例如批量赋值、切片等,比 torch.cpu 操作更灵活)
+        # To keep type hints simple (avoiding generics and subclasses), we                              只有with_numpy=True时才创建numpy视图
+        # only conditionally create the numpy array attribute. This can cause                           注意numpy操作在很多场景下比torch cpu操作更快更直观
         # AttributeError if `self.np` is accessed when `with_numpy=False`.
         if with_numpy:
             if dtype == torch.bfloat16:
@@ -153,13 +151,13 @@ class CpuGpuBuffer:
         """
         将 CPU buffer 中的数据拷贝到 GPU buffer 中。
         
-        参数：
-            n: 如果传入，则只拷贝前 n 行（常用于 batch 大小动态变化的情况）
-               如果为 None，则拷贝整个 buffer
+        参数:
+            n: 如果传入,则只拷贝前 n 行(常用于 batch 大小动态变化的情况)
+               如果为 None,则拷贝整个 buffer
         
-        返回：GPU 上的 tensor（实际是 self.gpu 的引用）
+        返回:GPU 上的 tensor(实际是 self.gpu 的引用)
         
-        特点：使用 non_blocking=True 进行异步拷贝，GPU 可以继续执行其他计算
+        特点:使用 non_blocking=True 进行异步拷贝,GPU 可以继续执行其他计算
         """
         
         if n is None:                                                   
@@ -420,8 +418,8 @@ _PROFILER_FUNC = None
 
 def record_function_or_nullcontext(name: str) -> AbstractContextManager:
     """
-    返回一个”性能分析用的“上下文管理器，如果没开profiling，就返回要给什么都不做的空context
-    也就是说它解决的问题是：要不要性能标记，如果要用哪种工具。
+    返回一个”性能分析用的“上下文管理器,如果没开profiling,就返回要给什么都不做的空context
+    也就是说它解决的问题是:要不要性能标记,如果要用哪种工具。
     """
     global _PROFILER_FUNC
 
@@ -430,7 +428,7 @@ def record_function_or_nullcontext(name: str) -> AbstractContextManager:
         return _PROFILER_FUNC(name)
 
     func = contextlib.nullcontext
-    if envs.VLLM_CUSTOM_SCOPES_FOR_PROFILING:  #pytorch的profier api，作用是在 profiler 结果里标记一段代码，
+    if envs.VLLM_CUSTOM_SCOPES_FOR_PROFILING:  #pytorch的profier api,作用是在 profiler 结果里标记一段代码,
         func = record_function
     elif envs.VLLM_NVTX_SCOPES_FOR_PROFILING:  #NVTX 是 NVIDIA 的 profiling 标记工具。
         import nvtx

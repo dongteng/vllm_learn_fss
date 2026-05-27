@@ -153,6 +153,9 @@ def dbo_enabled() -> bool:
 
 
 def dbo_current_ubatch_id() -> int:
+    """
+    返回当前线程整在处理的DBO微批次
+    """
     if len(_THREAD_ID_TO_CONTEXT) == 0:
         return 0
     return _THREAD_ID_TO_CONTEXT[threading.get_ident()]

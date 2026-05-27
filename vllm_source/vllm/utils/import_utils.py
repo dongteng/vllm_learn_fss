@@ -27,11 +27,11 @@ logger = init_logger(__name__)
 # serialized by value when communicating between processes
 def init_cached_hf_modules() -> None:
     """
-    Lazy initialization of the Hugging Face modules.
+    Lazy initialization of the Hugging Face modules.                                                                            延迟初始化huggingface的动态模块系统,延迟初始化体现在,知道这个函数被调用时才真正import和初始化
     """
     from transformers.dynamic_module_utils import init_hf_modules
 
-    init_hf_modules()
+    init_hf_modules()                                                                                                           #初始化huggingface动态模块缓存/注册机制
 
 
 def import_pynvml():

@@ -33,9 +33,10 @@ def is_last_ubatch_empty(
     return (padded_num_tokens // num_ubatches) * (num_ubatches - 1) >= orig_num_tokens
 
 
-def check_ubatch_thresholds(
+def check_ubatch_thresholds(                                                                              #决定当前batch是否值得拆成microbatch
     config: ParallelConfig, num_tokens: int, uniform_decode: bool
 ) -> bool:
+    
     if not config.use_ubatching:
         return False
     if uniform_decode:

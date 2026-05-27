@@ -1477,22 +1477,22 @@ def get_kv_cache_configs(
     available_memory: list[int],
 ) -> list[KVCacheConfig]:
     """
-    Generates the KV cache configurations for a model.
-    Since we use a shared centralized controller for all workers, we need the
-    `kv_cache_config` to be consistent across all workers to make sure
-    the KV cache allocation can be applied to all workers. However, different
+    Generates the KV cache configurations for a model.                                                      为模型生成kv cache配置
+    Since we use a shared centralized controller for all workers, we need the                               由于我们为所有worker使用共享的中心控制器,我们需要所有worker的kv_cache_config保持一致
+    `kv_cache_config` to be consistent across all workers to make sure                                      以确保kv cache的分配方案能够应用到所有worker
+    the KV cache allocation can be applied to all workers. However, different                               然而 不同worker可用的显存可能不同,并且可能拥有不同类型的层(当启用pp时)
     workers may have different memory available, and different type of layers
-    (when pipeline parallel is enabled). To handle the difference between
+    (when pipeline parallel is enabled). To handle the difference between                                   为了处理worker之间的这些差异,现采用如下方案
     workers, the current implementation is:
-    1. Merge the KV cache specs of all workers to get the KVCacheSpecs for
+    1. Merge the KV cache specs of all workers to get the KVCacheSpecs for                                  1.合并所有worker的kv cache spec,从而得到整个模型的KVCacheSpec
        the whole model.
-    2. Generate the KV cache groups based on the layer ratio of the whole model.
+    2. Generate the KV cache groups based on the layer ratio of the whole model.                            2.基于整个模型中的层比例生成KV cache group  这一步也会处理混合模型的spec同一问题
        This also handles spec unification for hybrid models.
-    3. Handle auto-fit max_model_len and memory checks using the unified specs.
-    4. Generate the KV cache configs for each worker based on the KV cache
-       grouping strategy. (This is reasonable because the layer ratio of
+    3. Handle auto-fit max_model_len and memory checks using the unified specs.                             3.使用统一后的spec处理auto-fit max_model_len和显存检查
+    4. Generate the KV cache configs for each worker based on the KV cache                                  4.基于kv cache grouping策略,为每个worker生成kv cache config
+       grouping strategy. (This is reasonable because the layer ratio of                                       (这是合理的 因为不同pp stage的层比例通常是相似的)
        different PP stages are similar.)
-    5. Change the num_blocks of each worker to the smallest among all workers
+    5. Change the num_blocks of each worker to the smallest among all workers                               5.将每个worker的num_blocks调整为所有worker中最小那个,并按比例缩小tensor大小,以避免分配未使用的显存
        and shrink tensor sizes proportionally to avoid allocating unused memory.
 
     Args:

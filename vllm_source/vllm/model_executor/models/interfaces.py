@@ -651,45 +651,45 @@ def is_hybrid(
     return getattr(model, "is_hybrid", False)
 
 
-@runtime_checkable
-class MixtureOfExperts(Protocol):
+@runtime_checkable                                                                                      #runtime_checkable允许在运行时使用isinstance(obj,MixtureOfExperts)来检查对象是否符合该协议
+class MixtureOfExperts(Protocol):                                                                       #Protocol是python的接口协议,只要某个类实现了这些属性和方法,就可以被认为是一个MoE模型
     """
-    Check if the model is a mixture of experts (MoE) model.
+    Check if the model is a mixture of experts (MoE) model.                                             用于检查一个模型是否实现了MoE接口
     """
 
-    expert_weights: MutableSequence[Iterable[Tensor]]
-    """
-    Expert weights saved in this rank.
+    expert_weights: MutableSequence[Iterable[Tensor]]                                                   #当前rank保存的expert权重, 注意在ep下,每个GPU只保存部分物理专家,所以这里不是全模型所有expert
+    """                                                                                                 #而是当前GPU本地拥有的expert参数            
+    Expert weights saved in this rank.                                                                  #数据结构:第一维:基层MoE
 
-    The first dimension is the layer, and the second dimension is different
+    The first dimension is the layer, and the second dimension is different                              第二维:该层expert的不同参数:例up project weight, down projection weight, gate weight
     parameters in the layer, e.g. up/down projection weights.
     """
 
     num_moe_layers: int
-    """Number of MoE layers in this model."""
+    """Number of MoE layers in this model."""                                                           #MoE层
 
     num_expert_groups: int
-    """Number of expert groups in this model."""
+    """Number of expert groups in this model."""                                                        #专家组的数量,有些模型会把experts再分组:group0:expert0~7; group1:experts8~15. router可能先选group再在group内选expert
 
-    num_logical_experts: int
-    """Number of logical experts in this model."""
+    num_logical_experts: int                                                                            #逻辑专家的数量 这是router看到的expert编号空间,例如L0 L1 L2 L3
+    """Number of logical experts in this model."""                                                      #router只感知logical expert
 
-    num_physical_experts: int
+    num_physical_experts: int                                                                           #物理专家的总数量,真正的FFN模块,一个逻辑专家可以对应多个物理专家
     """Number of physical experts in this model."""
 
-    num_local_physical_experts: int
+    num_local_physical_experts: int                                                                     #当前rank(GPU)本地拥有的物理专家数量
     """Number of local physical experts in this model."""
 
-    num_routed_experts: int
+    num_routed_experts: int                                                                             #routed experts数量,需要经过router动态选择的experts
     """Number of routed experts in this model."""
 
-    num_shared_experts: int
+    num_shared_experts: int                                                                             #共享专家数量,所有token都会经过的expert,不需要router选择
     """Number of shared experts in this model."""
 
-    num_redundant_experts: int
-    """Number of redundant experts in this model."""
+    num_redundant_experts: int                                                                          #冗余副本数量,即一个逻辑专家被复制出来的额外物理专家数量
+    """Number of redundant experts in this model."""                                                    #如L0->P0,P4,  P4就是P0的一个冗余副本,目的是负载均衡 提高吞吐 减少热点expert
 
-    moe_layers: Iterable[nn.Module]
+    moe_layers: Iterable[nn.Module]                                                                     #当前模型中的所有MoE层列表
     """List of MoE layers in this model."""
 
     def set_eplb_state(
@@ -699,25 +699,25 @@ class MixtureOfExperts(Protocol):
         logical_replica_count: Tensor,
     ) -> None:
         """
-        Register the EPLB state in the MoE model.
+        Register the EPLB state in the MoE model.                                                         注册EPLB(Expert Parallel Load Balancing)状态,用于动态监控expert负载,并进行负载均衡
 
-        Since these are views of the actual EPLB state, any changes made by
-        the EPLB algorithm are automatically reflected in the model's behavior
+        Since these are views of the actual EPLB state, any changes made by                               由于这里传入的是实际EPLB状态tensor的视图(view)(视图史多个变量共同指向同一块底层内存)
+        the EPLB algorithm are automatically reflected in the model's behavior                            因此EPLB算法对这些状态所作的任何修改都会自动反映到模型行为中,而不需要额外再次调用方法去设置新状态。
         without requiring additional method calls to set new states.
 
-        You should also collect model's `expert_weights` here instead of in
-        the weight loader, since after initial weight loading, further
-        processing like quantization may be applied to the weights.
+        You should also collect model's `expert_weights` here instead of in                               你也应该在这里手机模型的expert_weights而不是weight loader阶段收集,因为模型初始加载完权重后,还可能对权重继续进行后处理
+        the weight loader, since after initial weight loading, further                                    量化 权重变换 tensor packing    kernel格式变换,因此只有在这里获取权重,才能拿到最终真正参与计算的 expert 权重。
+        processing like quantization may be applied to the weights.                                       #上边这句话说 模型刚加载出来的权重,不一定是最终真正用于GPU计算的权重,所以不要太早保存expert_weights
 
         Args:
-            expert_load_view: A view of the expert load metrics tensor.
-            logical_to_physical_map: Mapping from logical to physical experts.
-            logical_replica_count: Count of replicas for each logical expert.
+            expert_load_view: A view of the expert load metrics tensor.                                   expert负载统计tensor的视图(view)
+            logical_to_physical_map: Mapping from logical to physical experts.                            逻辑专家到物理专家的映射关系
+            logical_replica_count: Count of replicas for each logical expert.                             每个逻辑专家对应的物理副本数量
         """
         for layer_idx, layer in enumerate(self.moe_layers):
             # Register the expert weights.
             self.expert_weights.append(layer.get_expert_weights())
-            layer.set_eplb_state(
+            layer.set_eplb_state(                                                                         #把EPLB状态注入当前 MoE layer,因为
                 moe_layer_idx=layer_idx,
                 expert_load_view=expert_load_view,
                 logical_to_physical_map=logical_to_physical_map,

@@ -46,7 +46,7 @@ def cuda_get_device_properties(
 
 @cache
 def is_pin_memory_available() -> bool:
-    from vllm.platforms import current_platform
+    from vllm.platforms import current_platform                                             #当前机器是否支持锁页内存
 
     return current_platform.is_pin_memory_available()
 

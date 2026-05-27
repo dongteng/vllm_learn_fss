@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 _KV_CONNECTOR_AGENT: KVConnectorBaseType | None = None
 
 
-def get_kv_transfer_group() -> KVConnectorBaseType:
+def get_kv_transfer_group() -> KVConnectorBaseType:                                                 #获取全局kv connector实例
     assert _KV_CONNECTOR_AGENT is not None, (
         "disaggregated KV cache transfer parallel group is not initialized"
     )

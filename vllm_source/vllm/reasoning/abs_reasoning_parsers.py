@@ -31,10 +31,10 @@ logger = init_logger(__name__)
 
 class ReasoningParser:
     """
-    Abstract reasoning parser class that should not be used directly.
-    Provided and methods should be used in derived classes.
+    Abstract reasoning parser class that should not be used directly.                                               抽象的推理解析器类,不应直接用
+    Provided and methods should be used in derived classes.                                                         应该在其派生类中实现并使用相关方法
 
-    It is used to extract reasoning content from the model output.
+    It is used to extract reasoning content from the model output.                                                  用于从模型输出中提取推理内容
     """
 
     def __init__(self, tokenizer: TokenizerLike, *args, **kwargs):
@@ -49,9 +49,9 @@ class ReasoningParser:
     @abstractmethod
     def is_reasoning_end(self, input_ids: list[int]) -> bool:
         """
-        Check if the reasoning content ends in the input_ids.
+        Check if the reasoning content ends in the input_ids.                                                       判断input_ids中推理内容是否已经结束
 
-        It is used in structured engines like `xgrammar` to check if the
+        It is used in structured engines like `xgrammar` to check if the                                            该方法用于结构化引擎(如xgrammar)中,用于检测模型输出中的推理部分是否结束
         reasoning content ends in the model output.
 
         Parameters:
@@ -91,7 +91,7 @@ class ReasoningParser:
     @abstractmethod
     def extract_content_ids(self, input_ids: list[int]) -> list[int]:
         """
-        Extract content token ids from the input_ids.
+        Extract content token ids from the input_ids.                                                                  从input_ids中提取内容token的id
         Parameters:
         input_ids: list[int]
             The input_ids of the model output.
@@ -107,9 +107,9 @@ class ReasoningParser:
         request: ChatCompletionRequest | ResponsesRequest,
     ) -> tuple[str | None, str | None]:
         """
-        Extract reasoning content from a complete model-generated string.
+        Extract reasoning content from a complete model-generated string.                                               从完整的模型生成字符串中提取推理内容(reasoning)
 
-        Used for non-streaming responses where we have the entire model response
+        Used for non-streaming responses where we have the entire model response                                        该方法用于非流失响应场景,即再将结果发送给客户端之前,已经拿到了完整的模型输出
         available before sending to the client.
 
         Parameters:
@@ -135,9 +135,9 @@ class ReasoningParser:
         delta_token_ids: Sequence[int],
     ) -> DeltaMessage | None:
         """
-        Instance method that should be implemented for extracting reasoning
-        from an incomplete response; for use when handling reasoning calls and
-        streaming. Has to be an instance method because  it requires state -
+        Instance method that should be implemented for extracting reasoning                                             从不完整响应中提取reasoning 该方法用于处理reasoning调用以及流失输出场景
+        from an incomplete response; for use when handling reasoning calls and                                          之所以必须设计为实例方法,是因为它需要维护状态  不仅需要当前的token/diff信息
+        streaming. Has to be an instance method because  it requires state -                                            还需要知道此前已经解析和提取过哪些内容(见构造函数)
         the current tokens/diffs, but also the information about what has
         previously been parsed and extracted (see constructor)
         """
@@ -148,7 +148,7 @@ class ReasoningParser:
         tool_server: ToolServer | None,
     ) -> str | None:
         """
-        Instance method that is implemented for preparing the structured tag
+        Instance method that is implemented for preparing the structured tag                                            用于准备结构化标签(structred tag)的实例方法
         Otherwise, None is returned
         """
         return None

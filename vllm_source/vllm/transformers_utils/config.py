@@ -890,10 +890,10 @@ def get_sentence_transformer_tokenizer_config(
 
 
 def maybe_register_config_serialize_by_value() -> None:
-    """Try to register HF model configuration class to serialize by value
+    """Try to register HF model configuration class to serialize by value                                                       尝试注册huggingface模型配置类,使其按值序列化方式进行序列化
 
-    If trust_remote_code is set, and the model's config file specifies an
-    `AutoConfig` class, then the config class is typically an instance of
+    If trust_remote_code is set, and the model's config file specifies an                                                       如果设置了trust_remote_code.并且模型的config文件中指定了AutoConfig类,那么该config通常是
+    `AutoConfig` class, then the config class is typically an instance of                                                       一个从HF动态模块缓存中导入的自定义类实例
     a custom class imported from the HF modules cache.
 
     Examples:
@@ -910,12 +910,12 @@ def maybe_register_config_serialize_by_value() -> None:
     >>> import transformers_modules  # success, initialized
     >>> klass.__class__  # transformers_modules.deepseek-ai.DeepSeek-V2.5.98b11844770b2c3ffc18b175c758a803640f4e77.configuration_deepseek.DeepseekV2Config
 
-    In the DeepSeek example, the config class is an instance of a custom
-    class that is not serializable by default. This class will not be
-    importable in spawned workers, and won't exist at all on
+    In the DeepSeek example, the config class is an instance of a custom                                                         在Deepseek的例子中,这个config类是一个动态生成的自定义类实例,默认情况下它是不可序列化的
+    class that is not serializable by default. This class will not be                                                            这类类在fork/spawn出来的worker中无法import,在其他节点上也可能根本不存在该模块
+    importable in spawned workers, and won't exist at all on                                                                     因此会导致config序列化失败
     other nodes, which breaks serialization of the config.
 
-    In this function we tell the cloudpickle serialization library to pass
+    In this function we tell the cloudpickle serialization library to pass                                                       因此在这个函数里，我们告诉 cloudpickle 对这些动态生成的类实例使用“按值序列化”，而不是“按引用序列化”
     instances of these generated classes by value instead of by reference,
     i.e. the class definition is serialized along with its data so that the
     class module does not need to be importable on the receiving end.

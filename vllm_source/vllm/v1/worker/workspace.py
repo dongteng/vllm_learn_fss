@@ -32,8 +32,8 @@ _manager: Optional["WorkspaceManager"] = None
 class WorkspaceManager:
     """Manager for workspace allocation.
 
-    Manages workspace buffers for DBO (Dual Batch Overlap) execution.
-    Can be locked to prevent further growth during execution.
+    Manages workspace buffers for DBO (Dual Batch Overlap) execution.                                     为DBO(双批次重叠)执行模式提供workspace缓冲区管理
+    Can be locked to prevent further growth during execution.                                             支持对workspace进行锁定,防止推理热路径中动态增长内存 从而保证性能稳定和可预测的显存占用
     """
 
     def __init__(self, device: torch.device, num_ubatches: int | None = None):
@@ -44,11 +44,11 @@ class WorkspaceManager:
         self._locked: bool = False
 
     @staticmethod
-    def _workspace_size_bytes(workspace: torch.Tensor | None) -> int:
+    def _workspace_size_bytes(workspace: torch.Tensor | None) -> int:                                     #返回workspace tensor占用的显存大小(以字节为单位)
         """Get size of workspace in bytes."""
         if workspace is None:
             return 0
-        return workspace.numel() * workspace.element_size()
+        return workspace.numel() * workspace.element_size()                                               #numel返回元素的总个数 element_size返回每个元素的字节数 
 
     def lock(self) -> None:
         """Lock the workspace to prevent further growth.
@@ -74,7 +74,7 @@ class WorkspaceManager:
     def get_simultaneous(
         self, *shapes_and_dtypes: tuple[tuple[int, ...], torch.dtype]
     ) -> list[torch.Tensor]:
-        """Get multiple workspace tensors simultaneously from a single allocation.
+        """Get multiple workspace tensors simultaneously from a single allocation.                       同时从同一块workspace buffer中分配多个tensor view
 
         Args:
             *shapes_and_dtypes: One or more (shape, dtype) tuples.
@@ -107,13 +107,13 @@ class WorkspaceManager:
         Returns:
             The current workspace tensor.
         """
-        ubatch_id = dbo_current_ubatch_id()
+        ubatch_id = dbo_current_ubatch_id()                                                                #获取当前ubatch_id(用于支持DBO) DBO模式下会存在多个batch的workspace
         current_workspace = self._current_workspaces[ubatch_id]
         current_size = self._workspace_size_bytes(current_workspace)
 
         if current_size < required_bytes:
 
-            def get_caller_info() -> str:
+            def get_caller_info() -> str:                                                                  #当前workspace不够大,需要扩容
                 """Find first frame outside WorkspaceManager."""
                 curr_frame = inspect.currentframe()
                 if curr_frame is None:
@@ -149,7 +149,7 @@ class WorkspaceManager:
                     current_workspace is None
                     or self._workspace_size_bytes(current_workspace) < required_bytes
                 ):
-                    # Delete old tensor before allocating new one to avoid
+                    # Delete old tensor before allocating new one to avoid                                  #先删除旧Tensor再分配新Tensor
                     # memory spike from resize_(). resize_() allocates new
                     # memory before freeing old, which can cause OOM.
                     # Must clear the list reference first since local var
@@ -222,12 +222,12 @@ def init_workspace_manager(
 
 
 def lock_workspace() -> None:
-    """Lock the workspace to prevent further growth.
+    """Lock the workspace to prevent further growth.                                                锁定workspace  防止其后续继续增长
 
-    After calling this function, any attempt to allocate a workspace larger
-    than the current size will raise an AssertionError. This ensures that
-    workspace size is fixed during execution and prevents unexpected memory
-    allocations in the hot path.
+    After calling this function, any attempt to allocate a workspace larger                         在调用此函数后 任何尝试分配比当前workspace更大的内存的操作
+    than the current size will raise an AssertionError. This ensures that                           都会直接AssertionError
+    workspace size is fixed during execution and prevents unexpected memory                         目的:确保在模型实际推理(hot path)阶段,workspace的大小是固定的
+    allocations in the hot path.                                                                    避免运行时出现意外的内存分配 导致性能抖动或显存超限
 
     Example:
         # During initialization

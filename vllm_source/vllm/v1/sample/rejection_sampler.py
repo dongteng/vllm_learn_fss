@@ -28,31 +28,31 @@ MAX_SPEC_LEN = 128
 
 class RejectionSampler(nn.Module):
     """
-    The implementation strictly follows the algorithm described in
+    The implementation strictly follows the algorithm described in                              严格遵循论文
         https://arxiv.org/abs/2211.17192.
-    However, we want to clarify the terminology used in the implementation:
-    accepted tokens: tokens that are accepted based on the relationship
+    However, we want to clarify the terminology used in the implementation:                     这里需要说明一下实现中使用的术语
+    accepted tokens: tokens that are accepted based on the relationship                         接受的token:根据草稿模型与目标模型的原始概率关系,被直接接受的token
             between the "raw" draft and target probabilities.
-    recovered tokens: tokens that are sampled based on the adjusted probability
-        distribution, which is derived from both the draft and target
+    recovered tokens: tokens that are sampled based on the adjusted probability                 基于修正后的概率分布重新采样得到的token, 该修正概率分布同时结合了draft probabilities
+        distribution, which is derived from both the draft and target                           target probabilities
         probabilities.
-    bonus tokens:
-        If all proposed tokens are accepted, the bonus token is added to the
+    bonus tokens:                                                                               奖励tokens
+        If all proposed tokens are accepted, the bonus token is added to the                    如果所有proposed tokens都被接受,则会在序列末尾额外添加一个bonus token
         end of the sequence. The bonus token is only sampled from the target
-        probabilities. We pass in the bonus tokens instead of sampling them
-        in the rejection sampler to allow for more flexibility in the
-        sampling process. For example, we can use top_p, top_k sampling for
-        bonus tokens, while spec decode does not support these sampling
+        probabilities. We pass in the bonus tokens instead of sampling them                     bonus token仅从target model的概率分布中采样
+        in the rejection sampler to allow for more flexibility in the                           我们将bonus token作为输入传入rejection sampler
+        sampling process. For example, we can use top_p, top_k sampling for                     而不是在rejection sampler内部直接采样,这样可让采样流程更加灵活
+        bonus tokens, while spec decode does not support these sampling                         例如bonus token可以使用:top_p  top_k等采样策略。
         strategies.
     output tokens:
-        Tokens are finally generated with the rejection sampler.
+        Tokens are finally generated with the rejection sampler.                                output_tokens = accepted tokens+revocered tokens +bonus tokens
         output tokens = accepted tokens + recovered tokens + bonus tokens
     """
 
     def __init__(self, sampler: Sampler):
         super().__init__()
         self.sampler = sampler
-        logprobs_mode = self.sampler.logprobs_mode
+        logprobs_mode = self.sampler.logprobs_mode                                              #获取当前logprobs的输出模式
         self.is_processed_logprobs_mode = logprobs_mode.startswith("processed")
         self.is_logits_logprobs_mode = logprobs_mode.endswith("logits")
 
@@ -68,28 +68,28 @@ class RejectionSampler(nn.Module):
         """
         Args:
             metadata:
-                Metadata for spec decoding.
-            draft_probs (Optional[torch.Tensor]):
-                Probability distribution for the draft tokens. Shape is
-                [num_tokens, vocab_size]. Can be None if probabilities are
-                not provided, which is the case for ngram spec decode.
-            logits (torch.Tensor):
+                Metadata for spec decoding.                                                       推测解码相关的元数据
+            draft_probs (Optional[torch.Tensor]):                                                 draft_probs(Optional[torch.Tensor])
+                Probability distribution for the draft tokens. Shape is                               draft tokens(草稿token)的概率分布
+                [num_tokens, vocab_size]. Can be None if probabilities are                            [num_tokens, vocab_size]
+                not provided, which is the case for ngram spec decode.                                当draft_probs不提供时可以为None
+            logits (torch.Tensor):                                                                logits(torch.Tensor) target model的logits概率分布
                 Target model's logits probability distribution.
-                Shape is [num_tokens + batch_size, vocab_size]. Here,
-                probabilities from different requests are flattened into a
+                Shape is [num_tokens + batch_size, vocab_size]. Here,                             shape:[num_tokens+batch_size, vocab_size] 
+                probabilities from different requests are flattened into a                        这里不同的request的概率结果会被展平到同一个tensor中,因为模型输出logits时本身就是这种格式
                 single tensor because this is the shape of the output logits.
-                NOTE: `logits` can be updated in place to save memory.
-            sampling_metadata (vllm.v1.sample.metadata.SamplingMetadata):
-                Additional metadata needed for sampling, such as temperature,
+                NOTE: `logits` can be updated in place to save memory.                            为了节省显存,logits可能会被原地修改
+            sampling_metadata (vllm.v1.sample.metadata.SamplingMetadata):                       
+                Additional metadata needed for sampling, such as temperature,                     sampling(采样)所需的额外元数据
                 top-k/top-p parameters, or other relevant information.
         Returns:
             SamplerOutput:
-                Contains the final output token IDs and their logprobs if
+                Contains the final output token IDs and their logprobs if                         最终输出的token IDs , 对应的logprobs(如果请求返回)
                 requested.
         """
-        assert metadata.max_spec_len <= MAX_SPEC_LEN
+        assert metadata.max_spec_len <= MAX_SPEC_LEN                                              #断言speculative decoding的最大draft长度不能超过系统允许的最大值
 
-        bonus_logits_indices = metadata.bonus_logits_indices
+        bonus_logits_indices = metadata.bonus_logits_indices                                      #bonus token对应的logits行号
         target_logits_indices = metadata.target_logits_indices
 
         # When indexing with a tensor (bonus_logits_indices), PyTorch

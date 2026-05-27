@@ -19,7 +19,7 @@ logger = init_logger(__name__)
 @dataclass(frozen=True)
 class KVCacheSpec:
     """
-    A base class for specifying the KV cache format of one layer.
+    A base class for specifying the KV cache format of one layer.                                   一个用于描述单层kv cache格式的基类
     """
 
     # number of tokens in a block
@@ -53,7 +53,7 @@ class KVCacheSpec:
     @classmethod
     def merge(cls, specs: list[Self]) -> Self:
         """
-        Merge a list of KVCacheSpec objects into a single KVCacheSpec object.
+        Merge a list of KVCacheSpec objects into a single KVCacheSpec object.                       把多个layer的KVCacheSpec合并成一个统一的spec, 真正做的不是融合 而是检查所有layer的kv cache配置是否完全一致,如果一直 就随便返回其中一个
         """
         assert all(spec == specs[0] for spec in specs[1:]), (
             "All layers in the same KV cache group must be the same."
@@ -61,19 +61,19 @@ class KVCacheSpec:
         return copy.deepcopy(specs[0])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True)                                                                            #变成不可变对象
 class AttentionSpec(KVCacheSpec):
     num_kv_heads: int
     head_size: int
     dtype: torch.dtype
 
     @property
-    def page_size_bytes(self) -> int:
+    def page_size_bytes(self) -> int:                                                               #计算一个kv cache block(page)占用的内存字节数
         return (
             2
             * self.block_size
-            * self.num_kv_heads
-            * self.head_size
+            * self.num_kv_heads                                                                     #头数 eg. 8
+            * self.head_size                                                                        #头维度大小  eg. 124
             * get_dtype_size(self.dtype)
         )
 
@@ -81,29 +81,34 @@ class AttentionSpec(KVCacheSpec):
 @dataclass(frozen=True)
 class FullAttentionSpec(AttentionSpec):
     """
-    When hybrid allocator is disabled and the model contains both full
-    attention layers and sliding window attention layers, sliding
-    window attention are regarded as full attention in KV cache manager
+    When hybrid allocator is disabled and the model contains both full                              当禁用混合KV Cache分配器,且模型同时存在全注意力层和滑动窗口注意力层时
+    attention layers and sliding window attention layers, sliding                                   滑动窗口注意层在KV cache管理器中会被当做全注意力处理(分配全部token的block)
+    window attention are regarded as full attention in KV cache manager                             但实际计算时仍使用滑动窗口注意力
     (blocks are allocated for all tokens), while computed as sliding window
     attention in model runner.
-    In this case, we use FullAttentionSpec and record the sliding window size.
+    In this case, we use FullAttentionSpec and record the sliding window size.                      此时 会用FullAttentionSpec 并记录sliding_window大小
     """
 
-    sliding_window: int | None = None
+    sliding_window: int | None = None                                                              #设置该值的时候 表示该层是滑动窗口注意力层 但是以FullAttentionSpec形式存在
     """
     Default to None for not using sliding window attention.
     """
-    attention_chunk_size: int | None = None
+    attention_chunk_size: int | None = None                                                        #分块局部注意力chunk的大小,目前主要用于某些特殊模型,同时存在该值与sliding_window是不允许的
 
-    def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
+    def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:                              #计算该注意力层在最坏情况下需要的最大kv cache显存(以字节为单位)
+        """
+        核心逻辑:
+          -正常情况下要为max_model_len个token分配block
+          -当启用DCP或PCP 每个rank只需负责一部分序列,因此实际需要的本地序列长度会减少
+        """
         max_model_len = vllm_config.model_config.max_model_len
         dcp_world_size = vllm_config.parallel_config.decode_context_parallel_size
         pcp_world_size = vllm_config.parallel_config.prefill_context_parallel_size
-        # Note(hc): each dcp rank only need save
-        # (max_model_len//dcp_world_size) tokens locally.
-        if dcp_world_size * pcp_world_size > 1:
+        # Note(hc): each dcp rank only need save                                                   #当启用dcp或pcp时,每个rank只需要保存部分token的kv cache
+        # (max_model_len//dcp_world_size) tokens locally.                                          #pcp按序列维度切分kv cache,每个rank只存max_model_len/dcp_world_size
+        if dcp_world_size * pcp_world_size > 1:                                                    #pcp也会影响上下文分配 因此这里考虑二者
             max_model_len = cdiv(max_model_len, dcp_world_size * pcp_world_size)
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size) * self.page_size_bytes                         #需要的block数量*每个block占用的字节数,向上取整 确保分配足够的block
 
     @classmethod
     def merge_window_sizes(cls, window_sizes: set[int]) -> int | None:
@@ -155,7 +160,7 @@ class FullAttentionSpec(AttentionSpec):
         assert (merged_spec.sliding_window is not None) + (
             merged_spec.attention_chunk_size is not None
         ) <= 1, (
-            "Model with both sliding window layers and chunked local attention "
+            "Model with both sliding window layers and chunked local attention "                       #不允许同时存在sliding_window和attention_chunk_size
             "layers is not supported."
         )
         return merged_spec

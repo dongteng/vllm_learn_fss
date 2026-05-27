@@ -8,9 +8,9 @@ from vllm.reasoning.basic_parsers import BaseThinkingReasoningParser
 
 class Qwen3ReasoningParser(BaseThinkingReasoningParser):
     """
-    Reasoning parser for the Qwen3 model.
+    Reasoning parser for the Qwen3 model.                                                                                       Qwen3模型的reasoning解析器
 
-    The Qwen3 model uses <think>...</think> tokens to denote reasoning text
+    The Qwen3 model uses <think>...</think> tokens to denote reasoning text                                                     
     within its output. The model provides a strict switch to disable reasoning
     output via the 'enable_thinking=False' parameter. This parser extracts the
     reasoning content enclosed by <think> and </think> tokens from the model's
@@ -50,7 +50,7 @@ class Qwen3ReasoningParser(BaseThinkingReasoningParser):
 
         # Check if the <think> is present in the model output, remove it
         # if it is present.
-        model_output_parts = model_output.partition(self.start_token)
+        model_output_parts = model_output.partition(self.start_token)                                                              #partition是python字符串的一个方法 作用是按照参数把字符串分成三部分
         model_output = (
             model_output_parts[2] if model_output_parts[1] else model_output_parts[0]
         )

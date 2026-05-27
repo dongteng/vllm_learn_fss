@@ -5,7 +5,7 @@
 @Desc      : 
 """
 import torch
-import torch.distributed as dist
+import torch.distributed as dist #PyTorch 的分布式通信模块。
 
 def init_process():
     #初始化 PyTorch 的分布式进程组，使用 NCCL 作为 GPU 间通信后端（这是目前多 GPU 训练/推理最快、最常用的后端）。

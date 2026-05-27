@@ -351,21 +351,21 @@ class VllmConfig:
         return hash_str
 
     def pad_for_cudagraph(self, batch_size: int) -> int:
-        # if batch_size > self.compilation_config.max_cudagraph_capture_size,
+        # if batch_size > self.compilation_config.max_cudagraph_capture_size,                                           将实际batch_size映射到用于CUDA Graph的padded batch size
         # it should raise an IndexError.
-        # the caller should make sure the batch_size is within the range,
-        # i.e., batch_size <= self.compilation_config.max_cudagraph_capture_size
-        return self.compilation_config.bs_to_padded_graph_size[batch_size]
+        # the caller should make sure the batch_size is within the range,                                               这里本质上是一个lookup table：实际batch size->graph capture size  例如1~8->8   9-16->16
+        # i.e., batch_size <= self.compilation_config.max_cudagraph_capture_size                                        这样可以复用已经capture的CUDA Graph
+        return self.compilation_config.bs_to_padded_graph_size[batch_size]                                              #这里的1~8->8  不是算出来的,而是提前存好的
 
     def enable_trace_function_call_for_thread(self) -> None:
         """
-        Set up function tracing for the current thread,
-        if enabled via the `VLLM_TRACE_FUNCTION` environment variable.
+        Set up function tracing for the current thread,                                                                 如果通过 VLLM_TRACE_FUNCTION环境变量启动了该功能
+        if enabled via the `VLLM_TRACE_FUNCTION` environment variable.                                                  则为当前线程设置函数调用追踪(function tracing)
         """
-        if envs.VLLM_TRACE_FUNCTION:
-            tmp_dir = tempfile.gettempdir()
-            # add username to tmp_dir to avoid permission issues
-            tmp_dir = os.path.join(tmp_dir, getpass.getuser())
+        if envs.VLLM_TRACE_FUNCTION:                                                                                    #检查是否开启tracing功能
+            tmp_dir = tempfile.gettempdir()                                                                             #获取系统临时目录 Linux一般是/tmp
+            # add username to tmp_dir to avoid permission issues                                                        #为了避免多用户公用/tmp时的权限问题,在tmp_dir后面追加当前用户名
+            tmp_dir = os.path.join(tmp_dir, getpass.getuser())  
             filename = (
                 f"VLLM_TRACE_FUNCTION_for_process_{os.getpid()}"
                 f"_thread_{threading.get_ident()}_at_{datetime.now()}.log"
@@ -376,7 +376,7 @@ class VllmConfig:
                 f"vllm-instance-{self.instance_id}",
                 filename,
             )
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)                                                       #创建日志目录
             enable_trace_function_call(log_path)
 
     @staticmethod

@@ -135,14 +135,14 @@ class MultiModalBudget:
 
 
 @dataclass
-class AttentionGroup:
-    backend: type[AttentionBackend]
-    layer_names: list[str]
-    kv_cache_spec: KVCacheSpec
+class AttentionGroup:                                                                           
+    backend: type[AttentionBackend]                                                                         #注意力后端实现类,类型是AttentionBackend的子类而不是实例
+    layer_names: list[str]                                                                                  #当前attention group管理的layer名称列表,一个group可以对应多个transformer layer  例如["model.layers.0", "model.layers.1"]
+    kv_cache_spec: KVCacheSpec                                                                              #kv cache的规格定义 
     kv_cache_group_id: int
-    # When ubatching is enabled we will have a metadata builder for each ubatch
-    # so that if they use internal persistent buffers for cudagraphs, and they
-    # won't have to worry about conflicting with the other ubatches.
+    # When ubatching is enabled we will have a metadata builder for each ubatch                             #当启用ubatching时,我们会为每个ubatch创建于给独立的metadata builder
+    # so that if they use internal persistent buffers for cudagraphs, and they                               这样一来 如果它们在cudagraph中使用内部持久化buffer 就不需要担心与其他ubatch发生冲突
+    # won't have to worry about conflicting with the other ubatches.                                        为啥ubatch还影响这个?
     metadata_builders: list[AttentionMetadataBuilder] = field(
         default_factory=lambda: []
     )
@@ -179,7 +179,7 @@ def sanity_check_mm_encoder_outputs(
     expected_num_items: int,
 ) -> None:
     """
-    Perform sanity checks for the result of
+    Perform sanity checks for the result of                                                               #对多模态模型的encoder输出进行合法性检查
     [`vllm.model_executor.models.SupportsMultiModal.embed_multimodal`][].
     """
     assert isinstance(mm_embeddings, (list, tuple, torch.Tensor)), (
@@ -366,15 +366,17 @@ def bind_kv_cache(
 def is_residual_scattered_for_sp(
     vllm_config: VllmConfig, num_input_tokens: int
 ) -> bool:
-    """Check if the residual tensor is scattered for sequence parallelism.
+    """
+    这段本质再将 residual tensor是否按token切分 不是计算问题 而是编译模式+shape是否匹配预编译图的工程决策
+    Check if the residual tensor is scattered for sequence parallelism.                                         检查残差tensor是否在序列并行下被分片分散
 
-    The residual tensor is scattered across tensor parallel ranks when sequence
+    The residual tensor is scattered across tensor parallel ranks when sequence                                 当同时启用了序列并行和张量并行, 残差tensor会被分布到不同的tensor parallel rank(也就是不同GPU上) 而不是每个GPU保存一份
     parallelism and tensor parallelism is enabled.
 
-    This follows the same logic as SequenceParallelismPass.is_applicable_for_range():
-    - In full-graph compilation mode (no splitting ops or using inductor graph
-      partition), SP is always applied
-    - Otherwise, SP is only applied for specific shapes in compile_sizes
+    This follows the same logic as SequenceParallelismPass.is_applicable_for_range():                           它遵循的规则与 SequenceParallelismPass.is_applicable_for_range() 相同：
+    - In full-graph compilation mode (no splitting ops or using inductor graph                                  在完整图编译模式下(即不拆分算子,也不做inductor graph分区) 序列并行总会被启用
+      partition), SP is always applied  
+    - Otherwise, SP is only applied for specific shapes in compile_sizes                                        否则 普通编译模式下,序列并行只会在compole_sizes中指定的某些shape下启用
     """
     if not vllm_config.compilation_config.pass_config.enable_sp:
         return False

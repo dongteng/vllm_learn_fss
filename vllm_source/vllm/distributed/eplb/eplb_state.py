@@ -53,11 +53,11 @@ logger = init_logger(__name__)
 
 @dataclass
 class EplbModelState:
-    """EPLB metrics."""
+    """EPLB metrics. EPLB状态与统计信息"""
 
     physical_to_logical_map: torch.Tensor
     """
-    Mapping from physical experts to logical experts.
+    Mapping from physical experts to logical experts.                                   物理专家到逻辑专家的映射表
 
     Shape: (num_moe_layers, num_physical_experts)
 
@@ -73,32 +73,32 @@ class EplbModelState:
     """
     logical_to_physical_map: torch.Tensor
     """
-    Mapping from logical experts to physical experts.
+    Mapping from logical experts to physical experts.                                    逻辑专家到物理专家的映射表
 
-    This is a sparse matrix, where -1 indicates no mapping.
+    This is a sparse matrix, where -1 indicates no mapping.                              这是一个稀疏矩阵,其中-1表示不存在映射关系
 
     Shape: (num_moe_layers, num_logical_experts, num_redundant_experts + 1)
 
     # Example
 
-    For a 2-layer MoE model with 6 physical experts and 4 logical experts on 3
-    EP ranks, the mapping could look like this:
+    For a 2-layer MoE model with 6 physical experts and 4 logical experts on 3           对于一个2层moe模型,6个物理专家,4个逻辑专家,部署在3个ep ranks上的系统
+    EP ranks, the mapping could look like this:                                          ep rank是放expert的GPU/进程, 代表一个逻辑专家最多有几个物理专家
 
-    ```
-    [[[0, 4, -1],
-      [1, 5, -1],
-      [2, -1, -1],
+    ```                                                                                 第0层
+    [[[0, 4, -1],                                                                       Logical Expert 0 -> Physical Experts [0,4]
+      [1, 5, -1],                                                                       Logical Expert 1 -> Physical Experts [1,5]
+      [2, -1, -1],                                                                      Logical Expert 2 -> Physical Expert [2]
       [3, -1, -1]],
-     [[0, 2, 4],
-      [3, -1, -1],
+     [[0, 2, 4],                                                                        第1层Logical Expert 0 -> Physical Experts [0,2,4]
+      [3, -1, -1],  
       [1, -1, -1],
       [5, -1, -1]]]
     ```
     """
     logical_replica_count: torch.Tensor
     """
-    Number of replicas for each logical expert.
-    This is exactly the non-`-1` count in the `logical_to_physical_map`.
+    Number of replicas for each logical expert.                                         每个逻辑专家对应的副本数量
+    This is exactly the non-`-1` count in the `logical_to_physical_map`.                这里边的数量等于logical_to_physical_map中非-1元素的个数
 
     Shape: (num_moe_layers, num_logical_experts)
 
@@ -107,35 +107,35 @@ class EplbModelState:
     EP ranks, the count could look like this:
 
     ```
-    [[2, 2, 1, 1],
+    [[2, 2, 1, 1],                                                                      意义解释：第0层 逻辑专家0有2个副本,逻辑专家1有2个副本,逻辑专家2有1个副本,逻辑专家3有1个副本
      [3, 1, 1, 1]]
     """
 
     expert_load_pass: torch.Tensor
     """
-    Expert load during this forward pass. 
-    We use the token count each expert processes as the load.
+    Expert load during this forward pass.                                               当前这一次forward pass(前向传播)过程中,各个expert的负载情况
+    We use the token count each expert processes as the load.                           这里使用每个expert实际处理的token数量作为该expert的负载(load)
 
-    Shape: (num_moe_layers, num_physical_experts)
+    Shape: (num_moe_layers, num_physical_experts)                                       值表示该物理expert在当前forward中处理了多少个token(应该包含prefill与decode)
     """
     expert_load_window: torch.Tensor
     """
-    A sliding window of expert load.
+    A sliding window of expert load.                                                    专家负载的滑动窗口记录
 
-    Shape: (window_size, num_moe_layers, num_physical_experts)
+    Shape: (window_size, num_moe_layers, num_physical_experts)                          第一维:时间窗口(最近N次forward的历史记录),第二维:MoE层编号,第三维:物理专家(physical expert)编号
 
-    NOTE: The expert_load_view now records load for all physical experts
-    rather than just local experts. This ensures consistent load statistics
-    across different dispatch methods (naive all-to-all, DeepEP, pplx-kernels).
-    The recorded load will be multiplied by dp_size when using naive all-to-all
-    due to each DP rank contributing the same token set to the calculation.
+    NOTE: The expert_load_view now records load for all physical experts                说明:当前的expert_load_view已经更新为记录所有物理专家的负载,而不仅仅是本地expert
+    rather than just local experts. This ensures consistent load statistics             这么做是为了保证在不同的dispatch实现方式下的统计结果是一致的,如naiva all-to-all,DeepEP,pplx-kernels
+    across different dispatch methods (naive all-to-all, DeepEP, pplx-kernels).         这些不同实现方式下的MoE通信/调度路径不同,但load统计必须保持一致
+    The recorded load will be multiplied by dp_size when using naive all-to-all         额外说明:在使用naive all-to-all时,由于每个dp rank(数据并行进程)都会参与计算,并且每个rank处理的是相同的token集合
+    due to each DP rank contributing the same token set to the calculation.             因此记录到的load会被乘以dp_size 即:每个dp rank都看到同样的token,所以统计时会重复累加,需要通过dp_size进行归一化或放大校正
     See:
     https://github.com/vllm-project/vllm/pull/22167#pullrequestreview-3086143856
     """
     model_name: str
     model: MixtureOfExperts
-    expert_buffer: list[torch.Tensor]
-    """
+    expert_buffer: list[torch.Tensor]                                                   #用于在expert传输过程中,临时存储expert权重的缓冲区(buffer),这里的transfer通常指expert副本复制,迁移,GPU/rank间expert同步,EPLB动态负载均衡中的expert搬运
+    """                                                                                 #物理副本不是本来就是副本吗？咋还要迁移？
     The buffer to store the expert weights during transfer.
     """
     buffer_lock: threading.Lock
@@ -144,7 +144,7 @@ class EplbModelState:
     """
     buffer_ready_event: torch.cuda.Event | None
     """
-    CUDA event recorded when the async worker finishes filling the buffer.
+    CUDA event recorded when the async worker finishes filling the buffer.              用于标记expert_buffer是否已经准备完成,这是一个CUDA Event(GPU事件对象),通常用于GPU异步任务之间的同步
     The main thread waits on this before consuming the buffer.
     """
     ep_buffer_ready: int
@@ -162,11 +162,11 @@ class EplbModelState:
     """
     pending_global_ready_check: bool
     """
-    Whether the async EPLB needs to poll peers for buffer readiness.
+    Whether the async EPLB needs to poll peers for buffer readiness.                   当前async eplb是否还需要轮询(poll)其他peer/rank的buffer readiness
     """
     is_unchanged: list[bool]
     """
-    intermediate variable between `move_to_buffer` and `move_to_workspace`.
+    intermediate variable between `move_to_buffer` and `move_to_workspace`.           `move_to_buffer` and `move_to_workspace`之间使用的中间变量,它的大小与当前layer中的物理专家相同
     The size is same as the num of physical experts in the current layer.
     """
     is_received_locally: list[bool]
@@ -206,12 +206,12 @@ class EplbModelState:
 
 class EplbState:
     """
-    EplbState of each expert parallel model. Key is the model config hash.
+    EplbState of each expert parallel model. Key is the model config hash.                          每个ep模型对应的EPLB全局状态,key为model config hash,用于区分不同模型配置下的EPLB状态
     """
 
     def __init__(self, parallel_config: ParallelConfig, device: torch.device):
         self.parallel_config = parallel_config
-        self.device = device
+        self.device = device                                                                        #当前所属设备例如cuda:0  cuda:1 cpu
         self.model_states: dict[str, EplbModelState] = {}
         self.policy: type[AbstractEplbPolicy] = DefaultEplbPolicy
         """

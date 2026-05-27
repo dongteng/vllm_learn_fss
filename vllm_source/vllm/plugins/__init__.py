@@ -26,16 +26,16 @@ plugins_loaded = False
 
 
 def load_plugins_by_group(group: str) -> dict[str, Callable[[], Any]]:
-    from importlib.metadata import entry_points
+    from importlib.metadata import entry_points                                                                             #用于读取python包安装时注册的entry_points
 
     allowed_plugins = envs.VLLM_PLUGINS
 
     discovered_plugins = entry_points(group=group)
-    if len(discovered_plugins) == 0:
+    if len(discovered_plugins) == 0:                                                                                        #没发现插件
         logger.debug("No plugins for group %s found.", group)
         return {}
 
-    # Check if the only discovered plugin is the default one
+    # Check if the only discovered plugin is the default one                                                                #判断是否是默认组
     is_default_group = group == DEFAULT_PLUGINS_GROUP
     # Use INFO for non-default groups and DEBUG for the default group
     log_level = logger.debug if is_default_group else logger.info
@@ -66,16 +66,16 @@ def load_plugins_by_group(group: str) -> dict[str, Callable[[], Any]]:
 
 
 def load_general_plugins():
-    """WARNING: plugins can be loaded for multiple times in different
-    processes. They should be designed in a way that they can be loaded
+    """WARNING: plugins can be loaded for multiple times in different                                                          警告:插件可能会在不同进程中被加载多次
+    processes. They should be designed in a way that they can be loaded                                                        因此插件的设计必须保证:即使被重复加载多次,也不会产生问题
     multiple times without causing issues.
     """
-    global plugins_loaded
+    global plugins_loaded                                                                                                      #使用全局变量记录 当前进程是否已经加载过插件
     if plugins_loaded:
-        return
+        return                                                                                                                 #如果加载过就直接返回
     plugins_loaded = True
 
-    plugins = load_plugins_by_group(group=DEFAULT_PLUGINS_GROUP)
+    plugins = load_plugins_by_group(group=DEFAULT_PLUGINS_GROUP)                                                               #根据插件组加载插件                                                
     # general plugins, we only need to execute the loaded functions
     for func in plugins.values():
         func()

@@ -107,17 +107,17 @@ class SamplerOutput:
 @dataclass
 class KVConnectorOutput:
     # [req_ids]
-    finished_sending: set[str] | None = None
-    finished_recving: set[str] | None = None
+    finished_sending: set[str] | None = None                                                #已完成kv send的请求id集合, 例如当前worker已经把某个request的kv cache成功发送给远端/共享存储后,request_id会加入这个集合
+    finished_recving: set[str] | None = None                                                #已完成kv接收的请求id集合,表示某些请求的kv cache已经成功从远端加载回来, 调度器后续就可以直接复用这些kv,不必重新计算prefill
     kv_connector_stats: KVConnectorStats | None = None
     kv_cache_events: KVConnectorKVEvents | None = None
     # IDs of externally computed KV blocks that failed to load.
     # Requests referencing these blocks should be rescheduled to recompute them
-    invalid_block_ids: set[int] = field(default_factory=set)
-    # Configuration describing how many finished sending/receiving
-    # notifications should be expected for each request. This allows
-    # handshake-based connectors like Nixl to update the KVOutputAggregator.
-    # It captures a static setup info and should almost always remain constant
+    invalid_block_ids: set[int] = field(default_factory=set)                                #外部kv block加载失败的block id集合,调度器看到这些block无效后,不再继续复用,而是重新调度request  重新计算这些kv
+    # Configuration describing how many finished sending/receiving                              
+    # notifications should be expected for each request. This allows                        每个request预期会收到多少 发送完成/接收完成通知,这使得像nixl这种基于我手机之的connector
+    # handshake-based connectors like Nixl to update the KVOutputAggregator.                能够正确更新KVOututAggregator
+    # It captures a static setup info and should almost always remain constant              它记录的是一种静态配置,在connector完成初始化/发现(discovery)之后,对于同一个connector来说通常应当始终保持不变
     # for a given connector after discovery. Default value entails no change.
     expected_finished_count: int = 0
 
