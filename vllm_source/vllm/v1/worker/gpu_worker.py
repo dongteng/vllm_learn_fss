@@ -68,9 +68,8 @@ if TYPE_CHECKING:
 class Worker(WorkerBase):
     """
     GPU Worker的具体实现类(最常用Worker)
-    继承自WorkerBase,实现了GPU(CUDA/ROCm)平台下worker需要的功能,包括：模型加载、设备初始化、kv cache管理、profiler支持以及睡眠模式等
+    继承自WorkerBase,实现了GPU(CUDA/ROCm)平台下worker需要的功能,包括:模型加载 设备初始化 kv cache管理 profiler支持以及睡眠模式等
     """
-    
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -158,7 +157,7 @@ class Worker(WorkerBase):
         Args:
             tags: 需要唤醒的资源标签列表。
                   - 如果为 None,则唤醒所有已休眠的资源(weights + kv_cache 等)
-                  - 常见标签： "weights", "kv_cache"""
+                  - 常见标签: "weights", "kv_cache"""
         
         from vllm.device_allocator.cumem import CuMemAllocator      ## 调用底层 CuMemAllocator 执行唤醒操作(将之前卸载到 CPU 或其他内存的资源重新加载回 GPU)
 
@@ -206,7 +205,7 @@ class Worker(WorkerBase):
     def init_device(self):
         """
         初始化当前Worker的设备环境(主要针对GPU)
-        这是 Worker 启动过程中最重要的初始化步骤之一,主要完成：
+        这是 Worker 启动过程中最重要的初始化步骤之一,主要完成:
         1. 设置 CUDA 设备
         2. 处理数据并行(Data Parallel)下的 local_rank 调整
         3. 初始化分布式环境(NCCL)
@@ -243,7 +242,7 @@ class Worker(WorkerBase):
                     * self.parallel_config.tensor_parallel_size
                 )
 
-                # DP_LOCAL_RANK * TP_PP_WORLD_SIZE + TP_LOCAL_RANK  # 调整 local_rank：DP_LOCAL_RANK * (TP*PP) + 原 local_rank
+                # DP_LOCAL_RANK * TP_PP_WORLD_SIZE + TP_LOCAL_RANK  # 调整 local_rank:DP_LOCAL_RANK * (TP*PP) + 原 local_rank
                 self.local_rank += dp_local_rank * tp_pp_world_size
                 assert self.local_rank < torch.cuda.device_count(), (
                     f"DP adjusted local rank {self.local_rank} is out of bounds. "
@@ -294,7 +293,7 @@ class Worker(WorkerBase):
             raise RuntimeError(f"Not support device type: {self.device_config.device}")
 
         # Initialize workspace manager # ====================== 初始化工作空间管理器 ======================
-        # num_ubatches：用于支持 Dynamic Batch Overlap(DBO)时的微批次数量
+        # num_ubatches:用于支持 Dynamic Batch Overlap(DBO)时的微批次数量
         num_ubatches = 2 if self.vllm_config.parallel_config.enable_dbo else 1
         init_workspace_manager(self.device, num_ubatches)
 
@@ -631,7 +630,7 @@ class Worker(WorkerBase):
     ) -> ModelRunnerOutput | None:
         """执行模型前向计算(forward pass)。
 
-        这是 GPU Worker 中最核心的方法之一,负责：
+        这是 GPU Worker 中最核心的方法之一,负责:
         - 判断是否需要真正执行模型计算
         - 处理 Pipeline Parallelism (PP) 中的中间 tensor 传递
         - 调用 ModelRunner 执行实际的模型推理

@@ -310,15 +310,15 @@ def bind_kv_cache(
     num_attn_module: int = 1,
 ) -> None:
     """
-    Bind the allocated KV cache to both ModelRunner and forward context so
-    that the KV cache can be used in the forward pass.
+    Bind the allocated KV cache to both ModelRunner and forward context so                                     将已经分配好的kv cache同时绑定到modelrunner和forward context
+    that the KV cache can be used in the forward pass.                                                         这样模型在执行forward时能够访问并使用对应的kv cache
 
     This function:
-      1) Fills the ModelRunner's kv cache list (`runner_kv_caches`) with
-         kv_caches.
-      2) Associates each attention layer in the `forward_context` with its
+      1) Fills the ModelRunner's kv cache list (`runner_kv_caches`) with                                       将传入的kv caches填充到modelrunner持有的kv cache列表
+         kv_caches. 
+      2) Associates each attention layer in the `forward_context` with its                                     将forward_context中的每个Attention Layer与其对应的kv cache建立关联关系
          corresponding KV cache in kv_caches.
-
+                                                                                                    
     Args:
         kv_caches: The allocated kv_caches with layer names as keys.
         forward_context: The global forward context containing all Attention

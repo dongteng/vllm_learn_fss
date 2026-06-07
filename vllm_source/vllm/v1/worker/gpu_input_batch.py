@@ -114,13 +114,13 @@ class InputBatch:
         cp_kv_cache_interleave_size: int = 1,
     ):
         """管理一个batch内所有request的输入数据+运行时时态"""
-        self.is_pooling_model = is_pooling_model                                      #是否是pooling模型
-        self.is_spec_decode = is_spec_decode                                          #是否启用投机解码
-        self.max_num_reqs = max_num_reqs                                              #最多多少请求
-        self.max_model_len = max_model_len                                            #每个请求最大token长度
-        self.max_num_batched_tokens = max_num_batched_tokens                          #一次最多处理多少token
+        self.is_pooling_model = is_pooling_model                                            #是否是pooling模型
+        self.is_spec_decode = is_spec_decode                                                #是否启用投机解码
+        self.max_num_reqs = max_num_reqs                                                    #最多多少请求
+        self.max_model_len = max_model_len                                                  #每个请求最大token长度
+        self.max_num_batched_tokens = max_num_batched_tokens                                #一次最多处理多少token
         self.device = device
-        self.pin_memory = pin_memory                                                  ##是否使用 pinned memory加速 CPU→GPU 拷贝
+        self.pin_memory = pin_memory                                                        #是否使用 pinned memory加速 CPU→GPU 拷贝
         self.vocab_size = vocab_size
 
         self._req_ids: list[str | None] = []
@@ -128,7 +128,7 @@ class InputBatch:
 
         # TODO(woosuk): This buffer could be too large if max_model_len is big.
         # Find a way to reduce the CPU memory usage.
-        # This buffer is not directly transferred to the GPU, so it does not           #这个缓冲区不会直接传输到GPU,因此不需要进行pin_memory处理
+        # This buffer is not directly transferred to the GPU, so it does not                #这个缓冲区不会直接传输到GPU,因此不需要进行pin_memory处理
         # need to be pinned.
         self.token_ids_cpu_tensor = torch.zeros(
             (max_num_reqs, max_model_len),
@@ -136,18 +136,18 @@ class InputBatch:
             dtype=torch.int32,
             pin_memory=False,
         )
-        self.token_ids_cpu = self.token_ids_cpu_tensor.numpy()                          #一个numpy视图,指向token_ids_cpu_tensor,本质作用:用numpy来操作token,比torch更轻量(CPU)
+        self.token_ids_cpu = self.token_ids_cpu_tensor.numpy()                              #一个numpy视图,指向token_ids_cpu_tensor,本质作用:用numpy来操作token,比torch更轻量(CPU)
         self.is_token_ids_tensor = torch.zeros(
-            (max_num_reqs, max_model_len), device="cpu", dtype=bool, pin_memory=False   #一个bool矩阵,用来表示这个位置是否真的有token
+            (max_num_reqs, max_model_len), device="cpu", dtype=bool, pin_memory=False       #一个bool矩阵,用来表示这个位置是否真的有token
         )
-        self.is_token_ids = self.is_token_ids_tensor.numpy()                            #torch → numpy view(共享内存)
-        # Store prompt embeddings per request to avoid OOM from large upfront           #按请求分别存储prompt的embedding,避免在max_model_len很大时一次性分配过多内存导致OOM(溢出)
+        self.is_token_ids = self.is_token_ids_tensor.numpy()                                #torch → numpy view(共享内存)
+        # Store prompt embeddings per request to avoid OOM from large upfront               #按请求分别存储prompt的embedding,避免在max_model_len很大时一次性分配过多内存导致OOM(溢出)
         # allocation if max_model_len is big.
         # Maps req_index -> tensor of shape (num_prompt_tokens, hidden_size)
-        self.req_prompt_embeds: dict[int, torch.Tensor] = {}                            #一个字典:req_index → prompt 的 embedding,什么时候用？当输入不是token id而是已经算好的embedding时
-        self.num_tokens_no_spec = np.zeros(max_num_reqs, dtype=np.int32)                #每个request当前真实token数(不包含spec)
-        self.num_prompt_tokens = np.zeros(max_num_reqs, dtype=np.int32)                 #每个request的输入长度
-        self.num_computed_tokens_cpu_tensor = torch.zeros(                              #每个request算了多少token:[req0算了多少token, req1算了多少token, req2算了多少token, ...]
+        self.req_prompt_embeds: dict[int, torch.Tensor] = {}                                #一个字典:req_index → prompt 的 embedding,什么时候用？当输入不是token id而是已经算好的embedding时
+        self.num_tokens_no_spec = np.zeros(max_num_reqs, dtype=np.int32)                    #每个request当前真实token数(不包含spec)
+        self.num_prompt_tokens = np.zeros(max_num_reqs, dtype=np.int32)                     #每个request的输入长度
+        self.num_computed_tokens_cpu_tensor = torch.zeros(                                  #每个request算了多少token:[req0算了多少token, req1算了多少token, req2算了多少token, ...]
             (max_num_reqs,),
             device="cpu",
             dtype=torch.int32,
@@ -170,16 +170,16 @@ class InputBatch:
 
         # Sampling-related.
         self.temperature = torch.empty(
-            (max_num_reqs,), dtype=torch.float32, device=device                           #GPU 上的 temperature,每个request上1个,用于在采样前对 logits 做缩放:logits / temperature
+            (max_num_reqs,), dtype=torch.float32, device=device                             #GPU上的temperature,每个request上1个,用于在采样前对logits 做缩放:logits/temperature
         )
         self.temperature_cpu_tensor = torch.empty(
-            (max_num_reqs,), dtype=torch.float32, device="cpu", pin_memory=pin_memory     ##GPU 上的 temperature,pin_memory=True 时可以加速 CPU → GPU 的拷贝,支持DMA
+            (max_num_reqs,), dtype=torch.float32, device="cpu", pin_memory=pin_memory       #GPU 上的 temperature,pin_memory=True 时可以加速 CPU → GPU 的拷贝,支持DMA
         )
         self.temperature_cpu = self.temperature_cpu_tensor.numpy()
-        self.greedy_reqs: set[str] = set()                                                #需要走greedy解码的集合,这些请求可以走更快路径argmax(logits)不需要采样
-        self.random_reqs: set[str] = set()                                                #需要走随机采样的请求集合(temprature>0),这些请求执行softmax+随机采样(top-k/top-p)
+        self.greedy_reqs: set[str] = set()                                                  #需要走greedy解码的集合,这些请求可以走更快路径argmax(logits)不需要采样
+        self.random_reqs: set[str] = set()                                                  #需要走随机采样的请求集合(temprature>0),这些请求执行softmax+随机采样(top-k/top-p)
 
-        self.top_p = torch.empty((max_num_reqs,), dtype=torch.float32, device=device)     #GPU上的top_p
+        self.top_p = torch.empty((max_num_reqs,), dtype=torch.float32, device=device)       #GPU上的top_p
         self.top_p_cpu_tensor = torch.empty(
             (max_num_reqs,), dtype=torch.float32, device="cpu", pin_memory=pin_memory
         )

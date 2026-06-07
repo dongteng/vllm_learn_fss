@@ -13,7 +13,7 @@
 using namespace vllm;
 
 /*
-   This file defines quantized GEMM operations using the CUTLASS 2.x API, for
+   This file defines quantized GEMM operations using the CUTLASS 2.x API, for           这个文件试用cutlass 2.x api定义了量化GEMM操作 主要服务于SM90之前的GPU架构
    NVIDIA GPUs with SM versions prior to sm90 (Hopper).
 */
 
@@ -128,11 +128,11 @@ void cutlass_scaled_mm_azp_sm80(torch::Tensor& out, torch::Tensor const& a,
 }
 
 template <template <typename, typename> typename Epilogue,
-          typename... EpilogueArgs>
+          typename... EpilogueArgs>                                                           //...这是可变参数的表示 意思是可以有任意多个
 void cutlass_scaled_mm_sm89_epilogue(torch::Tensor& out, torch::Tensor const& a,
                                      torch::Tensor const& b,
-                                     EpilogueArgs&&... epilogue_args) {
-  if (a.dtype() == torch::kInt8) {
+                                     EpilogueArgs&&... epilogue_args) {                       //可变参数+完美转发 把bias等传下去
+  if (a.dtype() == torch::kInt8) {                                                            //如果a是int8 b也必须是int8 输出是bf16
     TORCH_CHECK(b.dtype() == torch::kInt8);
 
     if (out.dtype() == torch::kBFloat16) {
@@ -140,11 +140,11 @@ void cutlass_scaled_mm_sm89_epilogue(torch::Tensor& out, torch::Tensor const& a,
                                              Epilogue>(
           out, a, b, std::forward<EpilogueArgs>(epilogue_args)...);
     } else {
-      assert(out.dtype() == torch::kFloat16);
+      assert(out.dtype() == torch::kFloat16);                                                 //否则必须是fp16
       return cutlass_gemm_sm89_int8_dispatch<int8_t, cutlass::half_t, Epilogue>(
           out, a, b, std::forward<EpilogueArgs>(epilogue_args)...);
     }
-  } else {
+  } else {                                                                                    //走fp8路径
     TORCH_CHECK(a.dtype() == torch::kFloat8_e4m3fn);
     TORCH_CHECK(b.dtype() == torch::kFloat8_e4m3fn);
 

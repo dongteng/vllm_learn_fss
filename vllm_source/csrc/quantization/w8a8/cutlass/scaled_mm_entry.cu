@@ -1,9 +1,9 @@
 #include <cudaTypedefs.h>
 
-#include <c10/cuda/CUDAGuard.h>
-#include <torch/all.h>
+#include <c10/cuda/CUDAGuard.h>                                                       //cudaguard用于管理cuda设备的上下文(guard) 确保在当前作用域内正确切换设备 避免多设备环境下出现设备不匹配的问题
+#include <torch/all.h>                                                                //pytorch的主头文件 引入torch几乎所有常用的类和函数
 
-#include "cutlass_extensions/common.hpp"
+#include "cutlass_extensions/common.hpp"                                              //cutlass扩展库的公共头文件 cutlass是nvidia官方的高性能gemm模板库 
 
 void cutlass_scaled_mm_sm75(torch::Tensor& c, torch::Tensor const& a,
                             torch::Tensor const& b,
@@ -17,13 +17,14 @@ void cutlass_scaled_mm_sm80(torch::Tensor& c, torch::Tensor const& a,
                             torch::Tensor const& b_scales,
                             std::optional<torch::Tensor> const& bias);
 
-void cutlass_scaled_mm_sm89(torch::Tensor& c, torch::Tensor const& a,
+void cutlass_scaled_mm_sm89(torch::Tensor& c,                                         //输出矩阵C 会被原地修改
+                            torch::Tensor const& a,
                             torch::Tensor const& b,
                             torch::Tensor const& a_scales,
                             torch::Tensor const& b_scales,
-                            std::optional<torch::Tensor> const& bias);
+                            std::optional<torch::Tensor> const& bias);                //可选的bias
 
-#if defined ENABLE_SCALED_MM_SM90 && ENABLE_SCALED_MM_SM90
+#if defined ENABLE_SCALED_MM_SM90 && ENABLE_SCALED_MM_SM90                            //只有宏被定义且为真 下边的函数声明才会被编译器看到 通过这个宏可以在编译时灵活开启关闭对SM90的支持 常见用法:在CMake活编译命令中 通过-DENABLE_SCALED_MM_SM90=ON 来开启
 void cutlass_scaled_mm_sm90(torch::Tensor& c, torch::Tensor const& a,
                             torch::Tensor const& b,
                             torch::Tensor const& a_scales,
@@ -173,28 +174,28 @@ bool cutlass_group_gemm_supported(int64_t cuda_device_capability) {
   return false;
 }
 
-void cutlass_scaled_mm(torch::Tensor& c, torch::Tensor const& a,
+void cutlass_scaled_mm(torch::Tensor& c, torch::Tensor const& a,                                      //矩阵乘法的主入口函数(dispatcher) 负责参数检查 + 根据GPU架构选择最合适的kernel
                        torch::Tensor const& b, torch::Tensor const& a_scales,
                        torch::Tensor const& b_scales,
-                       std::optional<torch::Tensor> const& bias) {
+                       std::optional<torch::Tensor> const& bias) {                                    //根据GPU的sm版本自动选择最优kernel实现
   // Checks for conformality
-  TORCH_CHECK(a.dim() == 2 && b.dim() == 2 && c.dim() == 2);
+  TORCH_CHECK(a.dim() == 2 && b.dim() == 2 && c.dim() == 2);                                          //参数形状检查 都必须是2维
   TORCH_CHECK(c.size(0) == a.size(0) && a.size(1) == b.size(0) &&
               b.size(1) == c.size(1));
 
   // Check for strides and alignment
   TORCH_CHECK(a.stride(1) == 1 && c.stride(1) == 1);  // Row-major
   TORCH_CHECK(b.stride(0) == 1);                      // Column-major
-  TORCH_CHECK(c.stride(0) % 16 == 0 &&
+  TORCH_CHECK(c.stride(0) % 16 == 0 &&                                                                //gpu tensor core的内存访问要求,目的是一次加载16字节(128bit)
               b.stride(1) % 16 == 0);  // 16 Byte Alignment
 
   if (bias) {
-    TORCH_CHECK(bias->numel() == b.size(1) && bias->is_contiguous() &&
+    TORCH_CHECK(bias->numel() == b.size(1) && bias->is_contiguous() &&                                //numel指元素总数 
                 bias->dim() == 1);
   }
 
   at::cuda::OptionalCUDAGuard const device_guard(device_of(a));
-  int32_t version_num = get_sm_version_num();
+  int32_t version_num = get_sm_version_num();                                                         //读取gpu的sm架构版本号
 
 #if defined ENABLE_SCALED_MM_SM120 && ENABLE_SCALED_MM_SM120
   if (version_num >= 120) {

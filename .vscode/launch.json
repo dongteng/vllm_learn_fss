@@ -17,14 +17,13 @@
                 "--disable_frontend_multiprocessing","True",
                 "--gpu-memory-utilization", "0.6",
                 "--max-num-batched-tokens", "8192",
-                "--log_level","DEBUG",
                 "--max-num-seqs", "256",
                 "--port", "13311",
                 "--kv-transfer-config", "{\"kv_connector\":\"LMCacheConnectorV1\", \"kv_role\":\"kv_both\"}"
             ],
             "env": {
                 "LMCACHE_CHUNK_SIZE":"8",
-                "CUDA_VISIBLE_DEVICES": "3",
+                "CUDA_VISIBLE_DEVICES": "1",
                 "HTTP_PROXY": "",
                 "HTTPS_PROXY": "",
                 "NO_PROXY": "*"
